@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package cove.common;
+
+import "google/protobuf/timestamp.proto";
+
+message PaginationRequest {
+  int32 page_size = 1;
+  string cursor = 2;
+}
+
+message PaginationResponse {
+  string next_cursor = 1;
+  bool has_more = 2;
+  int32 total_count = 3;
+}
+
+message UserSummary {
+  string user_id = 1;
+  string username = 2;
+  string display_name = 3;
+  string avatar_url = 4;
+  bool is_following = 5;
+}
+
+message MediaReference {
+  string media_id = 1;
+  MediaType media_type = 2;
+  string url = 3;
+  int32 width = 4;
+  int32 height = 5;
+  double aspect_ratio = 6;
+  int32 duration_seconds = 7;
+  string thumbnail_url = 8;
+}
+
+enum MediaType {
+  MEDIA_TYPE_UNSPECIFIED = 0;
+  MEDIA_TYPE_PHOTO = 1;
+  MEDIA_TYPE_VIDEO = 2;
+}
+
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  VISIBILITY_FOLLOWERS = 1;
+  VISIBILITY_PRIVATE = 2;
+}

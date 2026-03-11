@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package cove.feed;
+
+import "cove/common.proto";
+import "cove/post.proto";
+
+service FeedService {
+  rpc GetHomeFeed(GetHomeFeedRequest) returns (GetHomeFeedResponse);
+}
+
+message GetHomeFeedRequest {
+  cove.common.PaginationRequest pagination = 1;
+}
+
+message GetHomeFeedResponse {
+  repeated FeedItem items = 1;
+  cove.common.PaginationResponse pagination = 2;
+}
+
+message FeedItem {
+  cove.post.PostDetail post = 1;
+}

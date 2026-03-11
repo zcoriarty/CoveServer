@@ -1,0 +1,35 @@
+# CoveServer Configuration
+# Values here are overridden by COVE_* environment variables.
+
+[server]
+host = "0.0.0.0"
+port = 50051
+
+[database]
+url = "postgres://cove:cove_secret@localhost:5432/cove"
+max_connections = 20
+min_connections = 5
+
+[redis]
+url = "redis://127.0.0.1:6379/"
+
+[storage]
+endpoint = "http://127.0.0.1:9000"
+bucket = "cove-media"
+region = "us-east-1"
+access_key = "cove"
+secret_key = "cove_secret"
+
+[auth]
+access_token_ttl_secs = 900        # 15 minutes
+refresh_token_ttl_secs = 604800    # 7 days
+jwt_secret = "change-me-in-production"
+
+[crypto]
+master_key_path = "./secrets/master.key"
+
+[media]
+max_upload_bytes = 52428800         # 50 MiB
+max_video_duration_secs = 60
+allowed_image_types = ["image/jpeg", "image/png", "image/webp"]
+allowed_video_types = ["video/mp4", "video/quicktime"]

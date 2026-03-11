@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package cove.comment;
+
+import "cove/common.proto";
+import "google/protobuf/timestamp.proto";
+
+service CommentService {
+  rpc AddComment(AddCommentRequest) returns (AddCommentResponse);
+  rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse);
+  rpc DeleteComment(DeleteCommentRequest) returns (DeleteCommentResponse);
+}
+
+message AddCommentRequest {
+  string post_id = 1;
+  string body = 2;
+  optional string parent_comment_id = 3;
+}
+
+message AddCommentResponse {
+  string comment_id = 1;
+  google.protobuf.Timestamp created_at = 2;
+}
+
+message ListCommentsRequest {
+  string post_id = 1;
+  cove.common.PaginationRequest pagination = 2;
+}
+
+message ListCommentsResponse {
+  repeated CommentDetail comments = 1;
+  cove.common.PaginationResponse pagination = 2;
+}
+
+message CommentDetail {
+  string comment_id = 1;
+  cove.common.UserSummary author = 2;
+  string body = 3;
+  optional string parent_comment_id = 4;
+  int32 reply_count = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message DeleteCommentRequest {
+  string comment_id = 1;
+}
+
+message DeleteCommentResponse {}

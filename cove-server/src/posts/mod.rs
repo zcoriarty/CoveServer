@@ -1,0 +1,419 @@
+//! Post service and gRPC handler.
+
+use crate::auth;
+use cove_common::error::{CoveError, CoveResult};
+use cove_common::id::{MediaId, PostId, UserId};
+use cove_proto::cove::common::{MediaReference, MediaType, UserSummary, Visibility};
+use cove_proto::cove::post::{
+    post_service_server::PostService, CreatePostRequest, CreatePostResponse, DeletePostRequest,
+    DeletePostResponse, EditCaptionRequest, EditCaptionResponse, GetPostRequest, GetPostResponse,
+    PostDetail,
+};
+use prost_types::Timestamp;
+use sqlx::PgPool;
+use tonic::{Request, Response, Status};
+
+/// Post service implementation.
+pub struct PostServiceImpl {
+    pub pool: PgPool,
+    pub jwt_secret: String,
+}
+
+impl PostServiceImpl {
+    pub fn new(pool: PgPool, jwt_secret: String) -> Self {
+        Self { pool, jwt_secret }
+    }
+
+    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+        auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
+    }
+
+    /// Assembles a PostDetail proto from DB rows.
+    pub async fn build_post_detail(
+        pool: &PgPool,
+        post_id: PostId,
+        author_id: UserId,
+        caption: &str,
+        visibility: &str,
+        like_count: i32,
+        comment_count: i32,
+        share_count: i32,
+        created_at: chrono::DateTime<chrono::Utc>,
+        edited_at: Option<chrono::DateTime<chrono::Utc>>,
+        liked_by_viewer: bool,
+    ) -> CoveResult<PostDetail> {
+        let author_row = sqlx::query(
+            r#"
+            SELECT u.id, u.username, u.display_name, p.avatar_media_id
+            FROM users u
+            LEFT JOIN profiles p ON p.user_id = u.id
+            WHERE u.id = $1
+            "#,
+        )
+        .bind(author_id.as_uuid())
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| CoveError::Database(e.to_string()))?
+        .ok_or_else(|| CoveError::NotFound("author not found".into()))?;
+
+        let author_user_id: uuid::Uuid = author_row.get(0);
+        let username: String = author_row.get(1);
+        let display_name: String = author_row.get(2);
+        let _avatar_media_id: Option<uuid::Uuid> = author_row.get(3);
+
+        let author = UserSummary {
+            user_id: author_user_id.to_string(),
+            username,
+            display_name,
+            avatar_url: String::new(),
+            is_following: false,
+        };
+
+        let media_rows = sqlx::query(
+            r#"
+            SELECT id, media_type, width, height, aspect_ratio, duration_seconds
+            FROM media_items
+            WHERE post_id = $1 AND processing_state = 'completed'
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(post_id.as_uuid())
+        .fetch_all(pool)
+        .await
+        .map_err(|e| CoveError::Database(e.to_string()))?;
+
+        let media_refs: Vec<MediaReference> = media_rows
+            .iter()
+            .map(|r| {
+                let id: uuid::Uuid = r.get(0);
+                let mt: String = r.get(1);
+                let w: i32 = r.get(2);
+                let h: i32 = r.get(3);
+                let ar: f64 = r.get(4);
+                let dur: i32 = r.get(5);
+                MediaReference {
+                    media_id: id.to_string(),
+                    media_type: media_type_from_str(&mt),
+                    url: String::new(),
+                    width: w,
+                    height: h,
+                    aspect_ratio: ar,
+                    duration_seconds: dur,
+                    thumbnail_url: String::new(),
+                }
+            })
+            .collect();
+
+        let visibility_proto = match visibility {
+            "followers" => Visibility::Followers as i32,
+            "private" => Visibility::Private as i32,
+            _ => Visibility::Unspecified as i32,
+        };
+
+        Ok(PostDetail {
+            post_id: post_id.to_string(),
+            author: Some(author),
+            caption: caption.to_string(),
+            media: media_refs,
+            like_count,
+            comment_count,
+            share_count,
+            liked_by_viewer,
+            visibility: visibility_proto,
+            created_at: Some(Timestamp {
+                seconds: created_at.timestamp(),
+                nanos: created_at.timestamp_subsec_nanos() as i32,
+            }),
+            edited_at: edited_at.map(|t| Timestamp {
+                seconds: t.timestamp(),
+                nanos: t.timestamp_subsec_nanos() as i32,
+            }),
+        })
+    }
+}
+
+fn media_type_from_str(s: &str) -> i32 {
+    match s {
+        "photo" => MediaType::Photo as i32,
+        "video" => MediaType::Video as i32,
+        _ => MediaType::Unspecified as i32,
+    }
+}
+
+#[tonic::async_trait]
+impl PostService for PostServiceImpl {
+    async fn create_post(
+        &self,
+        request: Request<CreatePostRequest>,
+    ) -> Result<Response<CreatePostResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let visibility = match req.visibility() {
+            Visibility::Followers => "followers",
+            Visibility::Private => "private",
+            _ => "followers",
+        };
+
+        let post_id = PostId::new();
+        let created_at = chrono::Utc::now();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO posts (id, author_id, caption, visibility, post_type, created_at)
+            VALUES ($1, $2, $3, $4, 'photo', $5)
+            "#,
+        )
+        .bind(post_id.as_uuid())
+        .bind(auth.user_id.as_uuid())
+        .bind(req.caption.as_str())
+        .bind(visibility)
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        for media_id_str in &req.media_ids {
+            let media_id = MediaId::parse(media_id_str)
+                .map_err(|_| Status::invalid_argument("invalid media_id"))?;
+
+            let result = sqlx::query(
+                r#"
+                UPDATE media_items
+                SET post_id = $1
+                WHERE id = $2 AND owner_id = $3 AND post_id IS NULL
+                "#,
+            )
+            .bind(post_id.as_uuid())
+            .bind(media_id.as_uuid())
+            .bind(auth.user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+            if result.rows_affected() == 0 {
+                return Err(Status::invalid_argument(format!(
+                    "media {} not found or already attached",
+                    media_id_str
+                )));
+            }
+        }
+
+        let job_payload = serde_json::json!({
+            "job_type": "feed_fanout",
+            "post_id": post_id.to_string(),
+            "author_id": auth.user_id.to_string()
+        });
+
+        sqlx::query(
+            r#"
+            INSERT INTO jobs (id, job_type, payload, state)
+            VALUES ($1, 'feed_fanout', $2, 'pending')
+            "#,
+        )
+        .bind(uuid::Uuid::now_v7())
+        .bind(job_payload)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(CreatePostResponse {
+            post_id: post_id.to_string(),
+            created_at: Some(Timestamp {
+                seconds: created_at.timestamp(),
+                nanos: created_at.timestamp_subsec_nanos() as i32,
+            }),
+        }))
+    }
+
+    async fn get_post(
+        &self,
+        request: Request<GetPostRequest>,
+    ) -> Result<Response<GetPostResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let post_id = PostId::parse(&req.post_id)
+            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+
+        let post_row = sqlx::query(
+            r#"
+            SELECT id, author_id, caption, visibility, like_count, comment_count, share_count,
+                   created_at, edited_at, is_deleted
+            FROM posts
+            WHERE id = $1
+            "#,
+        )
+        .bind(post_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        let post_row = post_row.ok_or_else(|| Status::not_found("post not found"))?;
+
+        let author_id: uuid::Uuid = post_row.get(1);
+        let author_id = UserId::from_uuid(author_id);
+        let visibility: String = post_row.get(3);
+        let like_count: i32 = post_row.get(4);
+        let comment_count: i32 = post_row.get(5);
+        let share_count: i32 = post_row.get(6);
+        let created_at: chrono::DateTime<chrono::Utc> = post_row.get(7);
+        let edited_at: Option<chrono::DateTime<chrono::Utc>> = post_row.get(8);
+        let is_deleted: bool = post_row.get(9);
+
+        if is_deleted {
+            return Err(Status::not_found("post not found"));
+        }
+
+        let can_view = if auth.user_id == author_id {
+            true
+        } else if visibility == "followers" {
+            let is_follower = sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1 FROM follows
+                    WHERE follower_id = $1 AND followee_id = $2 AND state = 'accepted'
+                )
+                "#,
+            )
+            .bind(auth.user_id.as_uuid())
+            .bind(author_id.as_uuid())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+            is_follower
+        } else {
+            false
+        };
+
+        if !can_view {
+            return Err(Status::permission_denied("not authorized to view this post"));
+        }
+
+        let liked_by_viewer = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM likes
+                WHERE user_id = $1 AND post_id = $2
+            )
+            "#,
+        )
+        .bind(auth.user_id.as_uuid())
+        .bind(post_id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        let caption: String = post_row.get(2);
+
+        let post_detail = PostServiceImpl::build_post_detail(
+            &self.pool,
+            post_id,
+            author_id,
+            &caption,
+            &visibility,
+            like_count,
+            comment_count,
+            share_count,
+            created_at,
+            edited_at,
+            liked_by_viewer,
+        )
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(GetPostResponse {
+            post: Some(post_detail),
+        }))
+    }
+
+    async fn delete_post(
+        &self,
+        request: Request<DeletePostRequest>,
+    ) -> Result<Response<DeletePostResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let post_id = PostId::parse(&req.post_id)
+            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT author_id FROM posts WHERE id = $1 AND NOT is_deleted
+            "#,
+        )
+        .bind(post_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        let row = row.ok_or_else(|| Status::not_found("post not found"))?;
+        let author_id: uuid::Uuid = row.get(0);
+        let author_id = UserId::from_uuid(author_id);
+
+        if auth.user_id != author_id && !auth.is_admin {
+            return Err(Status::permission_denied("only author or admin can delete"));
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE posts SET is_deleted = TRUE WHERE id = $1
+            "#,
+        )
+        .bind(post_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(DeletePostResponse {}))
+    }
+
+    async fn edit_caption(
+        &self,
+        request: Request<EditCaptionRequest>,
+    ) -> Result<Response<EditCaptionResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let post_id = PostId::parse(&req.post_id)
+            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+
+        let edited_at = chrono::Utc::now();
+
+        let result = sqlx::query(
+            r#"
+            UPDATE posts
+            SET caption = $1, edited_at = $2
+            WHERE id = $3 AND author_id = $4 AND NOT is_deleted
+            "#,
+        )
+        .bind(&req.caption)
+        .bind(edited_at)
+        .bind(post_id.as_uuid())
+        .bind(auth.user_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(Status::not_found("post not found or not authorized"));
+        }
+
+        Ok(Response::new(EditCaptionResponse {
+            edited_at: Some(Timestamp {
+                seconds: edited_at.timestamp(),
+                nanos: edited_at.timestamp_subsec_nanos() as i32,
+            }),
+        }))
+    }
+}

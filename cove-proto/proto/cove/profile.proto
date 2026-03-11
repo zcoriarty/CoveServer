@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package cove.profile;
+
+import "cove/common.proto";
+import "google/protobuf/timestamp.proto";
+
+service ProfileService {
+  rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
+  rpc GetProfileGrid(GetProfileGridRequest) returns (GetProfileGridResponse);
+}
+
+message GetProfileRequest {
+  string user_id = 1;
+}
+
+message GetProfileResponse {
+  string user_id = 1;
+  string username = 2;
+  string display_name = 3;
+  string bio = 4;
+  string avatar_url = 5;
+  int32 follower_count = 6;
+  int32 following_count = 7;
+  int32 post_count = 8;
+  bool is_private = 9;
+  bool is_following = 10;
+  bool is_followed_by = 11;
+  bool is_own_profile = 12;
+}
+
+message UpdateProfileRequest {
+  optional string display_name = 1;
+  optional string bio = 2;
+  optional string avatar_media_id = 3;
+  optional bool is_private = 4;
+}
+
+message UpdateProfileResponse {
+  string user_id = 1;
+  string display_name = 2;
+  string bio = 3;
+  string avatar_url = 4;
+  bool is_private = 5;
+}
+
+message GetProfileGridRequest {
+  string user_id = 1;
+  cove.common.PaginationRequest pagination = 2;
+}
+
+message GetProfileGridResponse {
+  repeated ProfileGridItem items = 1;
+  cove.common.PaginationResponse pagination = 2;
+}
+
+message ProfileGridItem {
+  string post_id = 1;
+  cove.common.MediaReference thumbnail = 2;
+  bool is_video = 3;
+  bool is_multi = 4;
+}

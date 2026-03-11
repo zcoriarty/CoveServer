@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package cove.like;
+
+import "google/protobuf/timestamp.proto";
+
+service LikeService {
+  rpc LikePost(LikePostRequest) returns (LikePostResponse);
+  rpc UnlikePost(UnlikePostRequest) returns (UnlikePostResponse);
+  rpc GetLikeStatus(GetLikeStatusRequest) returns (GetLikeStatusResponse);
+}
+
+message LikePostRequest {
+  string post_id = 1;
+}
+
+message LikePostResponse {
+  int32 like_count = 1;
+}
+
+message UnlikePostRequest {
+  string post_id = 1;
+}
+
+message UnlikePostResponse {
+  int32 like_count = 1;
+}
+
+message GetLikeStatusRequest {
+  string post_id = 1;
+}
+
+message GetLikeStatusResponse {
+  bool liked = 1;
+  int32 like_count = 2;
+}

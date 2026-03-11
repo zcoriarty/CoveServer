@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package cove.notification;
+
+import "cove/common.proto";
+import "google/protobuf/timestamp.proto";
+
+service NotificationService {
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
+  rpc MarkRead(MarkReadRequest) returns (MarkReadResponse);
+  rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse);
+}
+
+message ListNotificationsRequest {
+  cove.common.PaginationRequest pagination = 1;
+}
+
+message ListNotificationsResponse {
+  repeated NotificationItem notifications = 1;
+  cove.common.PaginationResponse pagination = 2;
+}
+
+message NotificationItem {
+  string notification_id = 1;
+  NotificationType notification_type = 2;
+  cove.common.UserSummary actor = 3;
+  string target_id = 4;
+  string message = 5;
+  bool is_read = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+enum NotificationType {
+  NOTIFICATION_TYPE_UNSPECIFIED = 0;
+  NOTIFICATION_TYPE_FOLLOW_REQUEST = 1;
+  NOTIFICATION_TYPE_FOLLOW_ACCEPTED = 2;
+  NOTIFICATION_TYPE_NEW_FOLLOWER = 3;
+  NOTIFICATION_TYPE_LIKE = 4;
+  NOTIFICATION_TYPE_COMMENT = 5;
+  NOTIFICATION_TYPE_SHARE = 6;
+  NOTIFICATION_TYPE_NEW_POST = 7;
+}
+
+message MarkReadRequest {
+  repeated string notification_ids = 1;
+}
+
+message MarkReadResponse {}
+
+message GetUnreadCountRequest {}
+
+message GetUnreadCountResponse {
+  int32 count = 1;
+}

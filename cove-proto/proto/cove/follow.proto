@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package cove.follow;
+
+import "cove/common.proto";
+import "google/protobuf/timestamp.proto";
+
+service FollowService {
+  rpc Follow(FollowRequest) returns (FollowResponse);
+  rpc Unfollow(UnfollowRequest) returns (UnfollowResponse);
+  rpc AcceptFollowRequest(AcceptFollowRequestReq) returns (AcceptFollowRequestResp);
+  rpc RejectFollowRequest(RejectFollowRequestReq) returns (RejectFollowRequestResp);
+  rpc GetFollowers(GetFollowersRequest) returns (GetFollowersResponse);
+  rpc GetFollowing(GetFollowingRequest) returns (GetFollowingResponse);
+  rpc GetPendingRequests(GetPendingRequestsRequest) returns (GetPendingRequestsResponse);
+  rpc GetFollowStatus(GetFollowStatusRequest) returns (GetFollowStatusResponse);
+}
+
+message FollowRequest {
+  string target_user_id = 1;
+}
+
+message FollowResponse {
+  FollowState state = 1;
+}
+
+message UnfollowRequest {
+  string target_user_id = 1;
+}
+
+message UnfollowResponse {}
+
+message AcceptFollowRequestReq {
+  string follower_user_id = 1;
+}
+
+message AcceptFollowRequestResp {}
+
+message RejectFollowRequestReq {
+  string follower_user_id = 1;
+}
+
+message RejectFollowRequestResp {}
+
+message GetFollowersRequest {
+  string user_id = 1;
+  cove.common.PaginationRequest pagination = 2;
+}
+
+message GetFollowersResponse {
+  repeated cove.common.UserSummary followers = 1;
+  cove.common.PaginationResponse pagination = 2;
+}
+
+message GetFollowingRequest {
+  string user_id = 1;
+  cove.common.PaginationRequest pagination = 2;
+}
+
+message GetFollowingResponse {
+  repeated cove.common.UserSummary following = 1;
+  cove.common.PaginationResponse pagination = 2;
+}
+
+message GetPendingRequestsRequest {
+  cove.common.PaginationRequest pagination = 1;
+}
+
+message GetPendingRequestsResponse {
+  repeated PendingFollowRequest requests = 1;
+  cove.common.PaginationResponse pagination = 2;
+}
+
+message PendingFollowRequest {
+  cove.common.UserSummary user = 1;
+  google.protobuf.Timestamp requested_at = 2;
+}
+
+message GetFollowStatusRequest {
+  string target_user_id = 1;
+}
+
+message GetFollowStatusResponse {
+  FollowState outgoing = 1;
+  FollowState incoming = 2;
+}
+
+enum FollowState {
+  FOLLOW_STATE_UNSPECIFIED = 0;
+  FOLLOW_STATE_NONE = 1;
+  FOLLOW_STATE_PENDING = 2;
+  FOLLOW_STATE_ACCEPTED = 3;
+  FOLLOW_STATE_BLOCKED = 4;
+}

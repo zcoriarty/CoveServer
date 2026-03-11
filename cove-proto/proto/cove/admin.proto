@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package cove.admin;
+
+import "google/protobuf/timestamp.proto";
+
+service AdminService {
+  rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse);
+  rpc ListInvites(ListInvitesRequest) returns (ListInvitesResponse);
+  rpc RevokeInvite(RevokeInviteRequest) returns (RevokeInviteResponse);
+  rpc SuspendUser(SuspendUserRequest) returns (SuspendUserResponse);
+  rpc UnsuspendUser(UnsuspendUserRequest) returns (UnsuspendUserResponse);
+  rpc GetSystemHealth(GetSystemHealthRequest) returns (GetSystemHealthResponse);
+  rpc GetAuditLog(GetAuditLogRequest) returns (GetAuditLogResponse);
+}
+
+message CreateInviteRequest {
+  int32 max_uses = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message CreateInviteResponse {
+  string invite_code = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message ListInvitesRequest {}
+
+message ListInvitesResponse {
+  repeated InviteInfo invites = 1;
+}
+
+message InviteInfo {
+  string invite_code = 1;
+  string created_by = 2;
+  int32 max_uses = 3;
+  int32 use_count = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  bool revoked = 7;
+}
+
+message RevokeInviteRequest {
+  string invite_code = 1;
+}
+
+message RevokeInviteResponse {}
+
+message SuspendUserRequest {
+  string user_id = 1;
+  string reason = 2;
+}
+
+message SuspendUserResponse {}
+
+message UnsuspendUserRequest {
+  string user_id = 1;
+}
+
+message UnsuspendUserResponse {}
+
+message GetSystemHealthRequest {}
+
+message GetSystemHealthResponse {
+  bool database_healthy = 1;
+  bool redis_healthy = 2;
+  bool storage_healthy = 3;
+  bool worker_healthy = 4;
+  int64 active_users = 5;
+  int64 total_posts = 6;
+  int64 storage_used_bytes = 7;
+}
+
+message GetAuditLogRequest {
+  int32 page_size = 1;
+  string cursor = 2;
+  optional string actor_id = 3;
+  optional string action_type = 4;
+}
+
+message GetAuditLogResponse {
+  repeated AuditEntry entries = 1;
+  string next_cursor = 2;
+  bool has_more = 3;
+}
+
+message AuditEntry {
+  string entry_id = 1;
+  string actor_id = 2;
+  string action = 3;
+  string target_type = 4;
+  string target_id = 5;
+  string details = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}

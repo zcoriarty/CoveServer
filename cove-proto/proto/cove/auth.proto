@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package cove.auth;
+
+import "google/protobuf/timestamp.proto";
+
+service AuthService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc ValidateInvite(ValidateInviteRequest) returns (ValidateInviteResponse);
+}
+
+message RegisterRequest {
+  string invite_code = 1;
+  string username = 2;
+  string email = 3;
+  string password = 4;
+  string display_name = 5;
+}
+
+message RegisterResponse {
+  string user_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message LoginRequest {
+  string username_or_email = 1;
+  string password = 2;
+  string device_id = 3;
+  string device_name = 4;
+}
+
+message LoginResponse {
+  string user_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message LogoutRequest {
+  string session_id = 1;
+}
+
+message LogoutResponse {}
+
+message RevokeSessionRequest {
+  string session_id = 1;
+}
+
+message RevokeSessionResponse {}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  repeated SessionInfo sessions = 1;
+}
+
+message SessionInfo {
+  string session_id = 1;
+  string device_name = 2;
+  string device_id = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp last_used_at = 5;
+  bool is_current = 6;
+}
+
+message ValidateInviteRequest {
+  string invite_code = 1;
+}
+
+message ValidateInviteResponse {
+  bool valid = 1;
+  string invited_by_username = 2;
+}

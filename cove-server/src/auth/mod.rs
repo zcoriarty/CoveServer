@@ -14,7 +14,7 @@ use cove_proto::cove::auth::{
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tonic::metadata::MetadataMap;

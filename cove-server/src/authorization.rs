@@ -3,7 +3,7 @@
 use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{PostId, UserId};
 use cove_proto::cove::common::UserSummary;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 /// Returns true if the viewer can see the post: viewer is author, or post is
 /// visible to followers and viewer has accepted follow, and post is not deleted.

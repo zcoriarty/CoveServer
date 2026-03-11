@@ -12,7 +12,7 @@ use cove_proto::cove::follow::{
     GetPendingRequestsRequest, GetPendingRequestsResponse, PendingFollowRequest,
     RejectFollowRequestReq, RejectFollowRequestResp, UnfollowRequest, UnfollowResponse,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 
 /// Follow service implementation.
@@ -346,7 +346,7 @@ impl FollowService for FollowServiceImpl {
             .map_err(|e| Status::internal("database error"))?;
 
             let has_more = rows.len() > pagination.limit as usize;
-            let rows = rows.into_iter().take(pagination.limit as usize).collect();
+            let rows: Vec<_> = rows.into_iter().take(pagination.limit as usize).collect();
             (rows, has_more)
         } else {
             let rows = sqlx::query(
@@ -370,13 +370,13 @@ impl FollowService for FollowServiceImpl {
             .map_err(|e| Status::internal("database error"))?;
 
             let has_more = rows.len() > pagination.limit as usize;
-            let rows = rows.into_iter().take(pagination.limit as usize).collect();
+            let rows: Vec<_> = rows.into_iter().take(pagination.limit as usize).collect();
             (rows, has_more)
         };
 
         let followers: Vec<UserSummary> = rows
             .iter()
-            .map(|row| {
+            .map(|row: &sqlx::postgres::PgRow| {
                 let user_id: uuid::Uuid = row.get(0);
                 let username: String = row.get(1);
                 let display_name: String = row.get(2);
@@ -492,7 +492,7 @@ impl FollowService for FollowServiceImpl {
             .map_err(|e| Status::internal("database error"))?;
 
             let has_more = rows.len() > pagination.limit as usize;
-            let rows = rows.into_iter().take(pagination.limit as usize).collect();
+            let rows: Vec<_> = rows.into_iter().take(pagination.limit as usize).collect();
             (rows, has_more)
         } else {
             let rows = sqlx::query(
@@ -516,13 +516,13 @@ impl FollowService for FollowServiceImpl {
             .map_err(|e| Status::internal("database error"))?;
 
             let has_more = rows.len() > pagination.limit as usize;
-            let rows = rows.into_iter().take(pagination.limit as usize).collect();
+            let rows: Vec<_> = rows.into_iter().take(pagination.limit as usize).collect();
             (rows, has_more)
         };
 
         let following: Vec<UserSummary> = rows
             .iter()
-            .map(|row| {
+            .map(|row: &sqlx::postgres::PgRow| {
                 let user_id: uuid::Uuid = row.get(0);
                 let username: String = row.get(1);
                 let display_name: String = row.get(2);
@@ -600,7 +600,7 @@ impl FollowService for FollowServiceImpl {
             .map_err(|e| Status::internal("database error"))?;
 
             let has_more = rows.len() > pagination.limit as usize;
-            let rows = rows.into_iter().take(pagination.limit as usize).collect();
+            let rows: Vec<_> = rows.into_iter().take(pagination.limit as usize).collect();
             (rows, has_more)
         } else {
             let rows = sqlx::query(
@@ -622,13 +622,13 @@ impl FollowService for FollowServiceImpl {
             .map_err(|e| Status::internal("database error"))?;
 
             let has_more = rows.len() > pagination.limit as usize;
-            let rows = rows.into_iter().take(pagination.limit as usize).collect();
+            let rows: Vec<_> = rows.into_iter().take(pagination.limit as usize).collect();
             (rows, has_more)
         };
 
         let requests: Vec<PendingFollowRequest> = rows
             .iter()
-            .map(|row| {
+            .map(|row: &sqlx::postgres::PgRow| {
                 let user_id: uuid::Uuid = row.get(0);
                 let username: String = row.get(1);
                 let display_name: String = row.get(2);

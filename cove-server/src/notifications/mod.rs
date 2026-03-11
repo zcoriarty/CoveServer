@@ -142,8 +142,8 @@ impl NotificationService for NotificationServiceImpl {
             .iter()
             .filter_map(|r| r.2)
             .fold(vec![], |mut acc, id| {
-                if !acc.contains(id) {
-                    acc.push(*id);
+                if !acc.contains(&id) {
+                    acc.push(id);
                 }
                 acc
             });
@@ -171,7 +171,7 @@ impl NotificationService for NotificationServiceImpl {
                         .get(&aid)
                         .map(|(username, display_name)| {
                             build_user_summary(
-                                &UserId::from_uuid(*aid),
+                                &UserId::from_uuid(aid),
                                 username.clone(),
                                 display_name.clone(),
                                 String::new(),
@@ -180,7 +180,7 @@ impl NotificationService for NotificationServiceImpl {
                         })
                         .unwrap_or_else(|| {
                             build_user_summary(
-                                &UserId::from_uuid(*aid),
+                                &UserId::from_uuid(aid),
                                 "[deleted]".into(),
                                 String::new(),
                                 String::new(),

@@ -10,7 +10,7 @@ use cove_proto::cove::post::{
     PostDetail,
 };
 use prost_types::Timestamp;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 
 /// Post service implementation.

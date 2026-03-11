@@ -1,6 +1,6 @@
 //! Job handler implementations for the background worker.
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 type JobResult = Result<(), Box<dyn std::error::Error>>;

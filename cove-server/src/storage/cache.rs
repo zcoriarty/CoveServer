@@ -33,7 +33,7 @@ impl CacheService {
     ) -> CoveResult<()> {
         let key = format!("feed:{}:{}", user_id, page);
         let mut conn = self.conn.clone();
-        conn.set_ex(&key, data, ttl_secs)
+        let _: () = conn.set_ex(&key, data, ttl_secs)
             .await
             .map_err(|e| CoveError::Internal(format!("redis set: {}", e)))?;
         Ok(())
@@ -76,7 +76,7 @@ impl CacheService {
     ) -> CoveResult<()> {
         let key = format!("profile:{}", user_id);
         let mut conn = self.conn.clone();
-        conn.set_ex(&key, data, ttl_secs)
+        let _: () = conn.set_ex(&key, data, ttl_secs)
             .await
             .map_err(|e| CoveError::Internal(format!("redis set: {}", e)))?;
         Ok(())

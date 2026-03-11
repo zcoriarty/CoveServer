@@ -9,7 +9,7 @@ use cove_proto::cove::user::{
     DeactivateAccountRequest, DeactivateAccountResponse, GetUserRequest, GetUserResponse,
     UpdateUserRequest, UpdateUserResponse,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 

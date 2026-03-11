@@ -199,6 +199,7 @@ impl SearchService for SearchServiceImpl {
             uuid::Uuid,
             String,
             String,
+            Option<String>,
             Option<uuid::Uuid>,
             Option<String>,
             Option<i32>,
@@ -301,6 +302,7 @@ impl SearchService for SearchServiceImpl {
         let snippet_len = 120;
         let results: Vec<SearchPostResult> = truncated
             .iter()
+            .cloned()
             .map(|(post_id, author_id, caption, username, display_name, media_id, media_type, width, height, aspect_ratio, duration_seconds, _)| {
                 let caption_snippet = if caption.len() > snippet_len {
                     format!("{}...", &caption[..snippet_len])
@@ -311,14 +313,14 @@ impl SearchService for SearchServiceImpl {
                 let author = build_user_summary(
                     &cove_common::id::UserId::from_uuid(*author_id),
                     username.clone(),
-                    display_name.clone(),
+                    display_name.as_deref().unwrap_or_default().to_string(),
                     String::new(),
                     false,
                 );
 
                 let media_type_enum = media_type
-                    .as_ref()
-                    .map(|t| match t.as_str() {
+                    .as_deref()
+                    .map(|t| match t {
                         "video" => MediaType::Video as i32,
                         _ => MediaType::Photo as i32,
                     })
@@ -348,7 +350,7 @@ impl SearchService for SearchServiceImpl {
             rows.get(pagination.limit as usize - 1)
                 .map(|r| {
                     PaginationParams::encode_cursor(&CursorValue {
-                        timestamp: r.10,
+                        timestamp: r.11,
                         id: r.0,
                     })
                 })

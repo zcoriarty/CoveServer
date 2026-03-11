@@ -3,9 +3,7 @@
 use crate::auth;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::Client;
-use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{MediaId, UserId};
-use cove_proto::cove::common::MediaType;
 use cove_proto::cove::media::{
     media_service_server::MediaService, CompleteUploadRequest, CompleteUploadResponse,
     GetMediaAccessRequest, GetMediaAccessResponse, InitiateUploadRequest, InitiateUploadResponse,
@@ -13,7 +11,7 @@ use cove_proto::cove::media::{
 };
 use prost_types::Timestamp;
 use std::time::Duration;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 
 /// Allowed content types for uploads.

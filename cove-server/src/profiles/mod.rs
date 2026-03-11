@@ -10,7 +10,7 @@ use cove_proto::cove::profile::{
     GetProfileRequest, GetProfileResponse, ProfileGridItem, UpdateProfileRequest,
     UpdateProfileResponse,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 
 /// Profile service implementation.

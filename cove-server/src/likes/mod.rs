@@ -8,7 +8,7 @@ use cove_proto::cove::like::{
     like_service_server::LikeService, GetLikeStatusRequest, GetLikeStatusResponse,
     LikePostRequest, LikePostResponse, UnlikePostRequest, UnlikePostResponse,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 

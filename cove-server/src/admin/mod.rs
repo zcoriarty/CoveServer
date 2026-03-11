@@ -1,7 +1,6 @@
 //! Admin service for invite management, user moderation, and system health.
 
 use crate::auth;
-use cove_common::error::CoveError;
 use cove_common::id::{InviteId, UserId};
 use cove_proto::cove::admin::{
     admin_service_server::AdminService, AuditEntry, CreateInviteRequest, CreateInviteResponse,
@@ -9,7 +8,7 @@ use cove_proto::cove::admin::{
     InviteInfo, ListInvitesRequest, ListInvitesResponse, RevokeInviteRequest, RevokeInviteResponse,
     SuspendUserRequest, SuspendUserResponse, UnsuspendUserRequest, UnsuspendUserResponse,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 
 pub struct AdminServiceImpl {

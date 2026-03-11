@@ -12,7 +12,7 @@ use cove_proto::cove::post::PostDetail;
 use prost::Message;
 use prost_types::Timestamp;
 use redis::AsyncCommands;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 

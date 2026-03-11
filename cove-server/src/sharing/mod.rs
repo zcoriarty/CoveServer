@@ -216,8 +216,8 @@ impl ShareService for ShareServiceImpl {
             .iter()
             .map(|r| r.1)
             .fold(vec![], |mut acc, id| {
-                if !acc.contains(id) {
-                    acc.push(*id);
+                if !acc.contains(&id) {
+                    acc.push(id);
                 }
                 acc
             });

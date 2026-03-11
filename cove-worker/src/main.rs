@@ -2,7 +2,7 @@
 //! Polls the jobs table and processes async tasks: feed fanout, media processing,
 //! notification delivery, EXIF stripping, thumbnail generation, and search indexing.
 
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{postgres::PgPoolOptions, Row};
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 

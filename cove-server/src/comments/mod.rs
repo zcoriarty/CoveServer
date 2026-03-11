@@ -10,7 +10,7 @@ use cove_proto::cove::comment::{
     CommentDetail, DeleteCommentRequest, DeleteCommentResponse, ListCommentsRequest,
     ListCommentsResponse,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -259,8 +259,8 @@ impl CommentService for CommentServiceImpl {
                 .iter()
                 .map(|r| r.1)
                 .fold(vec![], |mut acc, id| {
-                    if !acc.contains(id) {
-                        acc.push(*id);
+                    if !acc.contains(&id) {
+                        acc.push(id);
                     }
                     acc
                 });

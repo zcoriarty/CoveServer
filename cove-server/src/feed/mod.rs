@@ -263,6 +263,7 @@ impl FeedService for FeedServiceImpl {
         request: Request<GetHomeFeedRequest>,
     ) -> Result<Response<GetHomeFeedResponse>, Status> {
         let auth = self.auth(request.metadata())?;
+        tracing::info!(user_id = %auth.user_id, "get_home_feed called");
         let req = request.into_inner();
 
         let pagination = req.pagination.as_ref();
@@ -274,16 +275,8 @@ impl FeedService for FeedServiceImpl {
         let params = PaginationParams::from_proto(page_size, cursor_str);
         let is_page1 = params.cursor.is_none();
 
-        if is_page1 {
-            let cache_key = format!("feed:home:{}", auth.user_id);
-            let mut conn = self.redis.clone();
-            let cached: Result<Vec<u8>, _> = conn.get(&cache_key).await;
-            if let Ok(bytes) = cached {
-                if let Ok(resp) = GetHomeFeedResponse::decode(bytes.as_slice()) {
-                    return Ok(Response::new(resp));
-                }
-            }
-        }
+        // Redis read-cache disabled: always query Postgres for fresh data.
+        // TODO: re-enable once cache invalidation is verified end-to-end.
 
         let limit_plus_one = params.limit as i64 + 1;
 
@@ -364,6 +357,8 @@ impl FeedService for FeedServiceImpl {
             None
         };
 
+        tracing::info!(user_id = %auth.user_id, item_count = items.len(), has_more = has_more, "get_home_feed response");
+
         let response = GetHomeFeedResponse {
             items,
             pagination: Some(cove_proto::cove::common::PaginationResponse {
@@ -373,14 +368,8 @@ impl FeedService for FeedServiceImpl {
             }),
         };
 
-        if is_page1 {
-            let cache_key = format!("feed:home:{}", auth.user_id);
-            let bytes = response.encode_to_vec();
-            let mut conn = self.redis.clone();
-            let _: Result<(), redis::RedisError> = conn
-                .set_ex(cache_key, bytes, FEED_CACHE_TTL_SECS)
-                .await;
-        }
+        // Redis write-cache disabled while debugging.
+        // TODO: re-enable once cache invalidation is verified end-to-end.
 
         Ok(Response::new(response))
     }

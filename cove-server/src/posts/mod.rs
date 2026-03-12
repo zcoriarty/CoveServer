@@ -2,7 +2,7 @@
 
 use crate::auth;
 use cove_common::error::{CoveError, CoveResult};
-use cove_common::id::{MediaId, PostId, UserId};
+use cove_common::id::{FeedEntryId, MediaId, PostId, UserId};
 use cove_proto::cove::common::{MediaReference, MediaType, UserSummary, Visibility};
 use cove_proto::cove::post::{
     post_service_server::PostService, CreatePostRequest, CreatePostResponse, DeletePostRequest,
@@ -10,18 +10,20 @@ use cove_proto::cove::post::{
     PostDetail,
 };
 use prost_types::Timestamp;
+use redis::AsyncCommands;
 use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 
 /// Post service implementation.
 pub struct PostServiceImpl {
     pub pool: PgPool,
+    pub redis: redis::aio::ConnectionManager,
     pub jwt_secret: String,
 }
 
 impl PostServiceImpl {
-    pub fn new(pool: PgPool, jwt_secret: String) -> Self {
-        Self { pool, jwt_secret }
+    pub fn new(pool: PgPool, redis: redis::aio::ConnectionManager, jwt_secret: String) -> Self {
+        Self { pool, redis, jwt_secret }
     }
 
     fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
@@ -205,6 +207,29 @@ impl PostService for PostServiceImpl {
             }
         }
 
+        // Insert the author's own feed entry and bump post_count synchronously
+        // so the author sees their post immediately without waiting for the worker.
+        sqlx::query(
+            r#"
+            INSERT INTO feed_entries (id, user_id, post_id, created_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id, post_id) DO NOTHING
+            "#,
+        )
+        .bind(FeedEntryId::new().as_uuid())
+        .bind(auth.user_id.as_uuid())
+        .bind(post_id.as_uuid())
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        sqlx::query("UPDATE profiles SET post_count = post_count + 1 WHERE user_id = $1")
+            .bind(auth.user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
         let job_payload = serde_json::json!({
             "job_type": "feed_fanout",
             "post_id": post_id.to_string(),
@@ -226,6 +251,10 @@ impl PostService for PostServiceImpl {
         tx.commit()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+
+        let cache_key = format!("feed:home:{}", auth.user_id);
+        let mut conn = self.redis.clone();
+        let _: Result<(), _> = conn.del::<_, ()>(&cache_key).await;
 
         Ok(Response::new(CreatePostResponse {
             post_id: post_id.to_string(),

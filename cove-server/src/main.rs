@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user_svc = UserServiceImpl::new(pool.clone(), jwt_secret.clone(), password_hasher.clone());
     let profile_svc = ProfileServiceImpl::new(pool.clone(), jwt_secret.clone());
     let follow_svc = FollowServiceImpl::new(pool.clone(), jwt_secret.clone());
-    let post_svc = PostServiceImpl::new(pool.clone(), jwt_secret.clone());
+    let post_svc = PostServiceImpl::new(pool.clone(), redis_conn.clone(), jwt_secret.clone());
     let feed_svc = FeedServiceImpl::new(pool.clone(), redis_conn.clone(), jwt_secret.clone());
     let comment_svc = CommentServiceImpl::new(pool.clone(), jwt_secret.clone());
     let like_svc = LikeServiceImpl::new(pool.clone(), jwt_secret.clone());

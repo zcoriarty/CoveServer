@@ -1,5 +1,7 @@
 //! Job handler implementations for the background worker.
 
+use exif::{In, Reader as ExifReader, Tag};
+use image::{DynamicImage, ImageReader, codecs::jpeg::JpegEncoder};
 use sqlx::{PgPool, Row};
 use std::path::Path;
 use uuid::Uuid;
@@ -32,6 +34,8 @@ pub async fn handle_feed_fanout(
     .fetch_all(pool)
     .await?;
 
+    // Author's feed entry and post_count are handled synchronously in CreatePost.
+    // The worker only fans out to followers.
     if follower_ids.is_empty() {
         tracing::info!(post_id = post_id, "no followers to fan out to");
         return Ok(());
@@ -62,31 +66,12 @@ pub async fn handle_feed_fanout(
         .await?;
     }
 
-    sqlx::query(
-        r#"
-        INSERT INTO feed_entries (id, user_id, post_id, created_at)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (user_id, post_id) DO NOTHING
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(author_uuid)
-    .bind(post_uuid)
-    .bind(post_created_at)
-    .execute(pool)
-    .await?;
-
-    sqlx::query("UPDATE profiles SET post_count = post_count + 1 WHERE user_id = $1")
-        .bind(author_uuid)
-        .execute(pool)
-        .await?;
-
     let mut conn = redis_conn.clone();
     for follower_id in &follower_ids {
-        let key = format!("feed:{}:0", follower_id);
+        let key = format!("feed:home:{}", follower_id);
         let _: Result<(), _> = redis::AsyncCommands::del(&mut conn, &key).await;
     }
-    let author_key = format!("feed:{}:0", author_uuid);
+    let author_key = format!("feed:home:{}", author_uuid);
     let _: Result<(), _> = redis::AsyncCommands::del(&mut conn, &author_key).await;
 
     tracing::info!(
@@ -157,40 +142,38 @@ async fn process_image(
     original_key: &str,
     image_data: &[u8],
 ) -> JobResult {
-    let img = image::load_from_memory(image_data)
+    let orientation = read_exif_orientation(image_data);
+    tracing::debug!(media_id = %media_uuid, orientation = ?orientation, "EXIF orientation");
+
+    let mut img = ImageReader::new(std::io::Cursor::new(image_data))
+        .with_guessed_format()
+        .map_err(|e| format!("invalid image format: {}", e))?
+        .into_decoder()
+        .and_then(DynamicImage::from_decoder)
         .map_err(|e| format!("invalid image: {}", e))?;
+    img.apply_orientation(orientation);
 
     let (width, height) = (img.width(), img.height());
     let aspect_ratio = width as f64 / height.max(1) as f64;
 
-    let thumbnail = img.thumbnail(200, 200);
-    let mut thumb_bytes = Vec::new();
-    thumbnail.write_to(
-        &mut std::io::Cursor::new(&mut thumb_bytes),
-        image::ImageFormat::Jpeg,
-    )?;
+    let thumbnail = img.thumbnail(480, 480);
+    let thumb_bytes = encode_jpeg(&thumbnail, 88)?;
 
     let feed_img = if width > 800 {
-        img.resize(800, (800.0 / aspect_ratio) as u32, image::imageops::FilterType::Lanczos3)
+        let target_height = ((800.0 / aspect_ratio).round() as u32).max(1);
+        img.resize(800, target_height, image::imageops::FilterType::Lanczos3)
     } else {
         img.clone()
     };
-    let mut feed_bytes = Vec::new();
-    feed_img.write_to(
-        &mut std::io::Cursor::new(&mut feed_bytes),
-        image::ImageFormat::Jpeg,
-    )?;
+    let feed_bytes = encode_jpeg(&feed_img, 90)?;
 
     let display_img = if width > 1600 {
-        img.resize(1600, (1600.0 / aspect_ratio) as u32, image::imageops::FilterType::Lanczos3)
+        let target_height = ((1600.0 / aspect_ratio).round() as u32).max(1);
+        img.resize(1600, target_height, image::imageops::FilterType::Lanczos3)
     } else {
         img.clone()
     };
-    let mut display_bytes = Vec::new();
-    display_img.write_to(
-        &mut std::io::Cursor::new(&mut display_bytes),
-        image::ImageFormat::Jpeg,
-    )?;
+    let display_bytes = encode_jpeg(&display_img, 92)?;
 
     let base_key = original_key
         .rsplit_once('/')
@@ -226,6 +209,28 @@ async fn process_image(
     .await?;
 
     Ok(())
+}
+
+fn read_exif_orientation(data: &[u8]) -> image::metadata::Orientation {
+    let reader = ExifReader::new();
+    match reader.read_from_container(&mut std::io::Cursor::new(data)) {
+        Ok(exif) => match exif.get_field(Tag::Orientation, In::PRIMARY) {
+            Some(field) => {
+                let val = field.value.get_uint(0).unwrap_or(1) as u8;
+                image::metadata::Orientation::from_exif(val)
+                    .unwrap_or(image::metadata::Orientation::NoTransforms)
+            }
+            None => image::metadata::Orientation::NoTransforms,
+        },
+        Err(_) => image::metadata::Orientation::NoTransforms,
+    }
+}
+
+fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, image::ImageError> {
+    let mut output = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut output, quality);
+    encoder.encode_image(image)?;
+    Ok(output)
 }
 
 async fn process_video(

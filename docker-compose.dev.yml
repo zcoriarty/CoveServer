@@ -1,27 +1,4 @@
 services:
-  # ── Reverse Proxy / TLS Termination ──
-  traefik:
-    image: traefik:v3.1
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedByDefault=false"
-      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
-      - "--entrypoints.grpc.address=:443"
-      - "--entrypoints.metrics.address=:9090"
-      - "--certificatesresolvers.cove.acme.tlschallenge=true"
-      - "--certificatesresolvers.cove.acme.storage=/letsencrypt/acme.json"
-    ports:
-      - "443:443"
-      - "9090:9090"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik-certs:/letsencrypt
-    networks:
-      - cove-public
-      - cove-internal
-    restart: unless-stopped
-
-  # ── CoveServer gRPC API ──
   cove-api:
     build:
       context: .
@@ -34,18 +11,8 @@ services:
       COVE__REDIS__URL: "redis://redis:6379/"
       COVE__STORAGE__DATA_PATH: "/opt/cove/data/media"
       COVE__AUTH__JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
-      COVE__CRYPTO__MASTER_KEY_PATH: "/run/secrets/master_key"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.grpc.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.grpc.entrypoints=grpc"
-      - "traefik.http.routers.grpc.tls=true"
-      - "traefik.http.services.grpc.loadbalancer.server.port=50051"
-      - "traefik.http.services.grpc.loadbalancer.server.scheme=h2c"
     ports:
-      - "50051:50051"
-    secrets:
-      - master_key
+      - "0.0.0.0:50051:50051"
     volumes:
       - media-data:/opt/cove/data/media
     depends_on:
@@ -53,11 +20,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - cove-internal
     restart: unless-stopped
 
-  # ── Background Worker ──
   cove-worker:
     build:
       context: .
@@ -74,11 +38,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - cove-internal
     restart: unless-stopped
 
-  # ── PostgreSQL ──
   postgres:
     image: postgres:16-bookworm
     environment:
@@ -93,11 +54,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    networks:
-      - cove-internal
     restart: unless-stopped
 
-  # ── Redis ──
   redis:
     image: redis:7-bookworm
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-}"]
@@ -108,23 +66,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    networks:
-      - cove-internal
     restart: unless-stopped
 
 volumes:
   postgres-data:
   redis-data:
   media-data:
-  traefik-certs:
-
-networks:
-  cove-public:
-    driver: bridge
-  cove-internal:
-    driver: bridge
-    internal: true
-
-secrets:
-  master_key:
-    file: ./secrets/master.key

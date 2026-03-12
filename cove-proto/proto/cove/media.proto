@@ -3,47 +3,57 @@ syntax = "proto3";
 package cove.media;
 
 import "cove/common.proto";
-import "google/protobuf/timestamp.proto";
 
 service MediaService {
-  rpc InitiateUpload(InitiateUploadRequest) returns (InitiateUploadResponse);
-  rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
-  rpc GetMediaAccess(GetMediaAccessRequest) returns (GetMediaAccessResponse);
+  rpc UploadMedia(stream UploadMediaRequest) returns (UploadMediaResponse);
+  rpc DownloadMedia(DownloadMediaRequest) returns (stream DownloadMediaResponse);
+  rpc GetMediaStatus(GetMediaStatusRequest) returns (GetMediaStatusResponse);
 }
 
-message InitiateUploadRequest {
+message UploadMediaRequest {
+  oneof payload {
+    UploadMediaMetadata metadata = 1;
+    bytes chunk_data = 2;
+  }
+}
+
+message UploadMediaMetadata {
   string filename = 1;
   cove.common.MediaType media_type = 2;
   int64 file_size_bytes = 3;
   string content_type = 4;
+  string checksum = 5;
 }
 
-message InitiateUploadResponse {
-  string media_id = 1;
-  string upload_url = 2;
-  map<string, string> upload_headers = 3;
-  google.protobuf.Timestamp expires_at = 4;
-}
-
-message CompleteUploadRequest {
-  string media_id = 1;
-  string checksum = 2;
-}
-
-message CompleteUploadResponse {
+message UploadMediaResponse {
   string media_id = 1;
   ProcessingState state = 2;
 }
 
-message GetMediaAccessRequest {
+message DownloadMediaRequest {
   string media_id = 1;
   MediaVariant variant = 2;
 }
 
-message GetMediaAccessResponse {
-  string url = 1;
-  google.protobuf.Timestamp expires_at = 2;
-  map<string, string> headers = 3;
+message DownloadMediaResponse {
+  oneof payload {
+    DownloadMediaHeader header = 1;
+    bytes chunk_data = 2;
+  }
+}
+
+message DownloadMediaHeader {
+  string content_type = 1;
+  int64 file_size_bytes = 2;
+}
+
+message GetMediaStatusRequest {
+  string media_id = 1;
+}
+
+message GetMediaStatusResponse {
+  string media_id = 1;
+  ProcessingState state = 2;
 }
 
 enum ProcessingState {

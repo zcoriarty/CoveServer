@@ -29,9 +29,8 @@ sqlx = { workspace = true }
 # Redis
 redis = { workspace = true }
 
-# S3
-aws-sdk-s3 = { workspace = true }
-aws-config = { workspace = true }
+# Streams (for gRPC streaming)
+tokio-stream = { workspace = true }
 
 # Crypto
 argon2 = { workspace = true }

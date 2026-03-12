@@ -37,11 +37,7 @@ pub struct RedisConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
-    pub endpoint: String,
-    pub bucket: String,
-    pub region: String,
-    pub access_key: String,
-    pub secret_key: String,
+    pub data_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,11 +90,7 @@ impl Default for RedisConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:9000".to_string(),
-            bucket: "cove-media".to_string(),
-            region: "us-east-1".to_string(),
-            access_key: "".to_string(),
-            secret_key: "".to_string(),
+            data_path: "./data/media".to_string(),
         }
     }
 }
@@ -155,11 +147,7 @@ impl CoveConfig {
             .set_default("database.max_connections", 20i64)?
             .set_default("database.min_connections", 5i64)?
             .set_default("redis.url", default_redis)?
-            .set_default("storage.endpoint", "http://localhost:9000")?
-            .set_default("storage.bucket", "cove-media")?
-            .set_default("storage.region", "us-east-1")?
-            .set_default("storage.access_key", "")?
-            .set_default("storage.secret_key", "")?
+            .set_default("storage.data_path", "./data/media")?
             .set_default("auth.access_token_ttl_secs", 900i64)?
             .set_default("auth.refresh_token_ttl_secs", 604_800i64)?
             .set_default("auth.jwt_secret", "change-me-in-production")?

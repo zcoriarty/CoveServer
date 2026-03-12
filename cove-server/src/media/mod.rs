@@ -1,20 +1,18 @@
 //! Media service and gRPC handler.
 
 use crate::auth;
-use aws_sdk_s3::presigning::PresigningConfig;
-use aws_sdk_s3::Client;
+use crate::storage::object_store::LocalStorageService;
 use cove_common::id::{MediaId, UserId};
 use cove_proto::cove::media::{
-    media_service_server::MediaService, CompleteUploadRequest, CompleteUploadResponse,
-    GetMediaAccessRequest, GetMediaAccessResponse, InitiateUploadRequest, InitiateUploadResponse,
-    MediaVariant, ProcessingState,
+    media_service_server::MediaService, upload_media_request, DownloadMediaHeader,
+    DownloadMediaRequest, DownloadMediaResponse, download_media_response, GetMediaStatusRequest,
+    GetMediaStatusResponse, MediaVariant, ProcessingState, UploadMediaResponse,
+    UploadMediaRequest,
 };
-use prost_types::Timestamp;
-use std::time::Duration;
 use sqlx::{PgPool, Row};
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response, Status, Streaming};
+use tokio_stream::wrappers::ReceiverStream;
 
-/// Allowed content types for uploads.
 const ALLOWED_IMAGE_TYPES: &[&str] = &[
     "image/jpeg",
     "image/png",
@@ -30,20 +28,19 @@ const ALLOWED_VIDEO_TYPES: &[&str] = &[
 const MAX_IMAGE_SIZE_BYTES: i64 = 20 * 1024 * 1024; // 20 MB
 const MAX_VIDEO_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
 
-/// Media service implementation.
+const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024; // 64 KB
+
 pub struct MediaServiceImpl {
     pub pool: PgPool,
-    pub s3_client: Client,
-    pub bucket: String,
+    pub storage: LocalStorageService,
     pub jwt_secret: String,
 }
 
 impl MediaServiceImpl {
-    pub fn new(pool: PgPool, s3_client: Client, bucket: String, jwt_secret: String) -> Self {
+    pub fn new(pool: PgPool, storage: LocalStorageService, jwt_secret: String) -> Self {
         Self {
             pool,
-            s3_client,
-            bucket,
+            storage,
             jwt_secret,
         }
     }
@@ -88,28 +85,39 @@ impl MediaServiceImpl {
             _ => "photo",
         }
     }
-
 }
 
 #[tonic::async_trait]
 impl MediaService for MediaServiceImpl {
-    async fn initiate_upload(
+    type DownloadMediaStream = ReceiverStream<Result<DownloadMediaResponse, Status>>;
+
+    async fn upload_media(
         &self,
-        request: Request<InitiateUploadRequest>,
-    ) -> Result<Response<InitiateUploadResponse>, Status> {
+        request: Request<Streaming<UploadMediaRequest>>,
+    ) -> Result<Response<UploadMediaResponse>, Status> {
         let auth = self.auth(request.metadata())?;
-        let req = request.into_inner();
+        let mut stream = request.into_inner();
+
+        let first_msg = stream
+            .message()
+            .await?
+            .ok_or_else(|| Status::invalid_argument("empty upload stream"))?;
+
+        let metadata = match first_msg.payload {
+            Some(upload_media_request::Payload::Metadata(m)) => m,
+            _ => return Err(Status::invalid_argument("first message must be metadata")),
+        };
 
         self.validate_upload(
-            req.media_type,
-            req.file_size_bytes,
-            &req.content_type,
+            metadata.media_type,
+            metadata.file_size_bytes,
+            &metadata.content_type,
         )?;
 
         let media_id = MediaId::new();
-        let media_type_str = Self::media_type_to_str(req.media_type);
+        let media_type_str = Self::media_type_to_str(metadata.media_type);
 
-        let ext = req
+        let ext = metadata
             .filename
             .rsplit('.')
             .next()
@@ -118,112 +126,61 @@ impl MediaService for MediaServiceImpl {
         let sanitized_ext = if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "mp4" | "mov") {
             ext
         } else {
-            match req.media_type {
+            match metadata.media_type {
                 2 => "mp4".to_string(),
                 _ => "jpg".to_string(),
             }
         };
 
-        let s3_key = format!(
+        let storage_key = format!(
             "media/{}/original.{}",
             media_id.as_uuid(),
             sanitized_ext
         );
 
+        let mut file_data = Vec::with_capacity(metadata.file_size_bytes as usize);
+        while let Some(msg) = stream.message().await? {
+            match msg.payload {
+                Some(upload_media_request::Payload::ChunkData(chunk)) => {
+                    file_data.extend_from_slice(&chunk);
+                    if file_data.len() as i64 > metadata.file_size_bytes {
+                        return Err(Status::invalid_argument("upload exceeds declared file size"));
+                    }
+                }
+                _ => return Err(Status::invalid_argument("expected chunk_data after metadata")),
+            }
+        }
+
+        self.storage
+            .write_file(&storage_key, &file_data)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
         sqlx::query(
             r#"
             INSERT INTO media_items (
                 id, owner_id, media_type, original_key, content_type,
-                file_size_bytes, processing_state
+                file_size_bytes, processing_state, checksum
             )
-            VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+            VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
             "#,
         )
         .bind(media_id.as_uuid())
         .bind(auth.user_id.as_uuid())
         .bind(media_type_str)
-        .bind(&s3_key)
-        .bind(&req.content_type)
-        .bind(req.file_size_bytes)
+        .bind(&storage_key)
+        .bind(&metadata.content_type)
+        .bind(file_data.len() as i64)
+        .bind(&metadata.checksum)
         .execute(&self.pool)
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        let presigning_config = PresigningConfig::expires_in(Duration::from_secs(3600))
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let presigned = self
-            .s3_client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(&s3_key)
-            .presigned(presigning_config)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(3600);
-
-        let mut upload_headers = std::collections::HashMap::new();
-        upload_headers.insert(
-            "Content-Type".to_string(),
-            req.content_type,
-        );
-
-        Ok(Response::new(InitiateUploadResponse {
-            media_id: media_id.to_string(),
-            upload_url: presigned.uri().to_string(),
-            upload_headers,
-            expires_at: Some(Timestamp {
-                seconds: expires_at.timestamp(),
-                nanos: expires_at.timestamp_subsec_nanos() as i32,
-            }),
-        }))
-    }
-
-    async fn complete_upload(
-        &self,
-        request: Request<CompleteUploadRequest>,
-    ) -> Result<Response<CompleteUploadResponse>, Status> {
-        let auth = self.auth(request.metadata())?;
-        let req = request.into_inner();
-
-        let media_id = MediaId::parse(&req.media_id)
-            .map_err(|_| Status::invalid_argument("invalid media_id"))?;
-
-        let row = sqlx::query(
-            r#"
-            SELECT id, owner_id, processing_state FROM media_items WHERE id = $1
-            "#,
-        )
-        .bind(media_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?;
-
-        let row = row.ok_or_else(|| Status::not_found("media not found"))?;
-
-        let owner_id: uuid::Uuid = row.get(1);
-        let owner_id = UserId::from_uuid(owner_id);
-        let processing_state: String = row.get(2);
-
-        if owner_id != auth.user_id {
-            return Err(Status::permission_denied("not the media owner"));
-        }
-
-        if processing_state != "pending" {
-            return Err(Status::invalid_argument(
-                "media already processed or upload not in pending state",
-            ));
-        }
-
         sqlx::query(
             r#"
-            UPDATE media_items
-            SET checksum = $1, processing_state = 'processing'
-            WHERE id = $2
+            UPDATE media_items SET processing_state = 'processing' WHERE id = $1
             "#,
         )
-        .bind(&req.checksum)
         .bind(media_id.as_uuid())
         .execute(&self.pool)
         .await
@@ -245,16 +202,16 @@ impl MediaService for MediaServiceImpl {
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        Ok(Response::new(CompleteUploadResponse {
+        Ok(Response::new(UploadMediaResponse {
             media_id: media_id.to_string(),
             state: ProcessingState::Processing as i32,
         }))
     }
 
-    async fn get_media_access(
+    async fn download_media(
         &self,
-        request: Request<GetMediaAccessRequest>,
-    ) -> Result<Response<GetMediaAccessResponse>, Status> {
+        request: Request<DownloadMediaRequest>,
+    ) -> Result<Response<Self::DownloadMediaStream>, Status> {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
@@ -264,7 +221,7 @@ impl MediaService for MediaServiceImpl {
         let row = sqlx::query(
             r#"
             SELECT m.id, m.owner_id, m.post_id, m.original_key, m.thumbnail_key,
-                   m.feed_key, m.display_key, m.processing_state
+                   m.feed_key, m.display_key, m.processing_state, m.content_type
             FROM media_items m
             WHERE m.id = $1
             "#,
@@ -284,11 +241,10 @@ impl MediaService for MediaServiceImpl {
         let feed_key: Option<String> = row.get(5);
         let display_key: Option<String> = row.get(6);
         let processing_state: String = row.get(7);
+        let content_type: String = row.get(8);
 
         if processing_state != "completed" {
-            return Err(Status::failed_precondition(
-                "media is still processing",
-            ));
+            return Err(Status::failed_precondition("media is still processing"));
         }
 
         let authorized = if auth.user_id == owner_id {
@@ -341,38 +297,80 @@ impl MediaService for MediaServiceImpl {
         }
 
         let variant = req.variant();
-        let s3_key = match variant {
-            MediaVariant::Original => original_key,
+        let storage_key = match variant {
+            MediaVariant::Original | MediaVariant::Unspecified => original_key,
             MediaVariant::Thumbnail => thumbnail_key.unwrap_or(original_key),
             MediaVariant::Feed => feed_key.unwrap_or(original_key),
             MediaVariant::Display => display_key.unwrap_or(original_key),
-            _ => original_key,
         };
 
-        let presigning_config = PresigningConfig::expires_in(Duration::from_secs(3600))
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let presigned = self
-            .s3_client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(&s3_key)
-            .presigned(presigning_config)
+        let file_data = self
+            .storage
+            .read_file(&storage_key)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(3600);
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
 
-        let mut headers = std::collections::HashMap::new();
-        headers.insert("Location".to_string(), presigned.uri().to_string());
+        let file_content_type = content_type;
+        let file_len = file_data.len() as i64;
 
-        Ok(Response::new(GetMediaAccessResponse {
-            url: presigned.uri().to_string(),
-            expires_at: Some(Timestamp {
-                seconds: expires_at.timestamp(),
-                nanos: expires_at.timestamp_subsec_nanos() as i32,
-            }),
-            headers,
+        tokio::spawn(async move {
+            let header = DownloadMediaResponse {
+                payload: Some(download_media_response::Payload::Header(DownloadMediaHeader {
+                    content_type: file_content_type,
+                    file_size_bytes: file_len,
+                })),
+            };
+            if tx.send(Ok(header)).await.is_err() {
+                return;
+            }
+
+            for chunk in file_data.chunks(DOWNLOAD_CHUNK_SIZE) {
+                let msg = DownloadMediaResponse {
+                    payload: Some(download_media_response::Payload::ChunkData(chunk.to_vec())),
+                };
+                if tx.send(Ok(msg)).await.is_err() {
+                    return;
+                }
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn get_media_status(
+        &self,
+        request: Request<GetMediaStatusRequest>,
+    ) -> Result<Response<GetMediaStatusResponse>, Status> {
+        let _auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let media_id = MediaId::parse(&req.media_id)
+            .map_err(|_| Status::invalid_argument("invalid media_id"))?;
+
+        let row = sqlx::query(
+            "SELECT processing_state FROM media_items WHERE id = $1",
+        )
+        .bind(media_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        let row = row.ok_or_else(|| Status::not_found("media not found"))?;
+        let state_str: String = row.get(0);
+
+        let state = match state_str.as_str() {
+            "pending" => ProcessingState::Pending,
+            "processing" => ProcessingState::Processing,
+            "completed" => ProcessingState::Completed,
+            "failed" => ProcessingState::Failed,
+            _ => ProcessingState::Unspecified,
+        };
+
+        Ok(Response::new(GetMediaStatusResponse {
+            media_id: media_id.to_string(),
+            state: state as i32,
         }))
     }
 }

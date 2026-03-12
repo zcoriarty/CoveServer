@@ -1,102 +1,97 @@
-//! S3-compatible object storage helper for media files.
+//! Local filesystem storage for media files.
 
-use aws_sdk_s3::presigning::PresigningConfig;
-use aws_sdk_s3::Client as S3Client;
 use cove_common::error::{CoveError, CoveResult};
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use tokio::fs;
 
 #[derive(Clone)]
-pub struct ObjectStoreService {
-    client: S3Client,
-    bucket: String,
+pub struct LocalStorageService {
+    base_path: PathBuf,
 }
 
-impl ObjectStoreService {
-    pub fn new(client: S3Client, bucket: String) -> Self {
-        Self { client, bucket }
+impl LocalStorageService {
+    pub fn new(base_path: impl Into<PathBuf>) -> Self {
+        Self {
+            base_path: base_path.into(),
+        }
     }
 
-    pub async fn presigned_put_url(
-        &self,
-        key: &str,
-        content_type: &str,
-        ttl_secs: u64,
-    ) -> CoveResult<String> {
-        let presign_config = PresigningConfig::builder()
-            .expires_in(Duration::from_secs(ttl_secs))
-            .build()
-            .map_err(|e| CoveError::Storage(e.to_string()))?;
-
-        let request = self
-            .client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .content_type(content_type)
-            .presigned(presign_config)
+    /// Ensure the base directory exists (called once at startup).
+    pub async fn init(&self) -> CoveResult<()> {
+        fs::create_dir_all(&self.base_path)
             .await
-            .map_err(|e| CoveError::Storage(e.to_string()))?;
-
-        Ok(request.uri().to_string())
-    }
-
-    pub async fn presigned_get_url(&self, key: &str, ttl_secs: u64) -> CoveResult<String> {
-        let presign_config = PresigningConfig::builder()
-            .expires_in(Duration::from_secs(ttl_secs))
-            .build()
-            .map_err(|e| CoveError::Storage(e.to_string()))?;
-
-        let request = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .presigned(presign_config)
-            .await
-            .map_err(|e| CoveError::Storage(e.to_string()))?;
-
-        Ok(request.uri().to_string())
-    }
-
-    pub async fn delete_object(&self, key: &str) -> CoveResult<()> {
-        self.client
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(|e| CoveError::Storage(e.to_string()))?;
+            .map_err(|e| CoveError::Storage(format!("failed to create storage dir: {}", e)))?;
         Ok(())
     }
 
-    pub async fn head_object(&self, key: &str) -> CoveResult<Option<i64>> {
-        match self
-            .client
-            .head_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
+    fn resolve(&self, key: &str) -> PathBuf {
+        self.base_path.join(key)
+    }
+
+    /// Write data to a file, creating parent directories as needed.
+    /// Uses write-to-tmp + rename for atomicity.
+    pub async fn write_file(&self, key: &str, data: &[u8]) -> CoveResult<()> {
+        let path = self.resolve(key);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| CoveError::Storage(format!("mkdir failed: {}", e)))?;
+        }
+
+        let tmp_path = path.with_extension("tmp");
+        fs::write(&tmp_path, data)
             .await
-        {
-            Ok(output) => Ok(output.content_length()),
-            Err(e) => {
-                let service_err = e.into_service_error();
-                if service_err.is_not_found() {
-                    Ok(None)
-                } else {
-                    Err(CoveError::Storage(service_err.to_string()))
-                }
-            }
+            .map_err(|e| CoveError::Storage(format!("write failed: {}", e)))?;
+
+        fs::rename(&tmp_path, &path)
+            .await
+            .map_err(|e| CoveError::Storage(format!("rename failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    pub async fn read_file(&self, key: &str) -> CoveResult<Vec<u8>> {
+        let path = self.resolve(key);
+        fs::read(&path)
+            .await
+            .map_err(|e| CoveError::Storage(format!("read {}: {}", path.display(), e)))
+    }
+
+    pub async fn delete_file(&self, key: &str) -> CoveResult<()> {
+        let path = self.resolve(key);
+        match fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(CoveError::Storage(format!("delete failed: {}", e))),
+        }
+    }
+
+    pub async fn exists(&self, key: &str) -> CoveResult<bool> {
+        let path = self.resolve(key);
+        Ok(path.exists())
+    }
+
+    pub async fn file_size(&self, key: &str) -> CoveResult<Option<u64>> {
+        let path = self.resolve(key);
+        match fs::metadata(&path).await {
+            Ok(meta) => Ok(Some(meta.len())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(CoveError::Storage(format!("stat failed: {}", e))),
         }
     }
 
     pub async fn health_check(&self) -> CoveResult<()> {
-        self.client
-            .head_bucket()
-            .bucket(&self.bucket)
-            .send()
+        let probe = self.base_path.join(".health_check");
+        fs::write(&probe, b"ok")
             .await
-            .map_err(|e| CoveError::Unavailable(format!("s3: {}", e)))?;
+            .map_err(|e| CoveError::Unavailable(format!("storage: {}", e)))?;
+        fs::remove_file(&probe)
+            .await
+            .map_err(|e| CoveError::Unavailable(format!("storage: {}", e)))?;
         Ok(())
+    }
+
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
     }
 }

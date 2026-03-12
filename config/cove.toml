@@ -14,11 +14,7 @@ min_connections = 5
 url = "redis://127.0.0.1:6379/"
 
 [storage]
-endpoint = "http://127.0.0.1:9000"
-bucket = "cove-media"
-region = "us-east-1"
-access_key = "cove"
-secret_key = "cove_secret"
+data_path = "./data/media"
 
 [auth]
 access_token_ttl_secs = 900        # 15 minutes

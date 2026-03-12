@@ -1,6 +1,7 @@
 //! Job handler implementations for the background worker.
 
 use sqlx::{PgPool, Row};
+use std::path::Path;
 use uuid::Uuid;
 
 type JobResult = Result<(), Box<dyn std::error::Error>>;
@@ -61,7 +62,6 @@ pub async fn handle_feed_fanout(
         .await?;
     }
 
-    // Also insert for the author themselves
     sqlx::query(
         r#"
         INSERT INTO feed_entries (id, user_id, post_id, created_at)
@@ -76,13 +76,11 @@ pub async fn handle_feed_fanout(
     .execute(pool)
     .await?;
 
-    // Increment post count for the author
     sqlx::query("UPDATE profiles SET post_count = post_count + 1 WHERE user_id = $1")
         .bind(author_uuid)
         .execute(pool)
         .await?;
 
-    // Invalidate cached feeds for affected users
     let mut conn = redis_conn.clone();
     for follower_id in &follower_ids {
         let key = format!("feed:{}:0", follower_id);
@@ -103,8 +101,7 @@ pub async fn handle_feed_fanout(
 /// Media processing: validate, strip EXIF, generate thumbnails and display variants.
 pub async fn handle_media_processing(
     pool: &PgPool,
-    s3_client: &aws_sdk_s3::Client,
-    bucket: &str,
+    storage_base: &Path,
     payload: &serde_json::Value,
 ) -> JobResult {
     let media_id = payload["media_id"]
@@ -127,24 +124,19 @@ pub async fn handle_media_processing(
     let row = row.ok_or("media not found or not in processing state")?;
     let original_key: String = row.get(0);
     let media_type: String = row.get(1);
-    let content_type: String = row.get(2);
+    let _content_type: String = row.get(2);
 
     tracing::info!(media_id = media_id, media_type = %media_type, "processing media");
 
-    // Download the original from S3
-    let get_result = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(&original_key)
-        .send()
-        .await?;
-
-    let body = get_result.body.collect().await?.into_bytes();
+    let original_path = storage_base.join(&original_key);
+    let body = tokio::fs::read(&original_path)
+        .await
+        .map_err(|e| format!("read {}: {}", original_path.display(), e))?;
 
     if media_type == "photo" {
-        process_image(pool, s3_client, bucket, media_uuid, &original_key, &body).await?;
+        process_image(pool, storage_base, media_uuid, &original_key, &body).await?;
     } else if media_type == "video" {
-        process_video(pool, s3_client, bucket, media_uuid, &original_key, &body).await?;
+        process_video(pool, media_uuid, &body).await?;
     }
 
     sqlx::query(
@@ -160,8 +152,7 @@ pub async fn handle_media_processing(
 
 async fn process_image(
     pool: &PgPool,
-    s3_client: &aws_sdk_s3::Client,
-    bucket: &str,
+    storage_base: &Path,
     media_uuid: Uuid,
     original_key: &str,
     image_data: &[u8],
@@ -172,8 +163,6 @@ async fn process_image(
     let (width, height) = (img.width(), img.height());
     let aspect_ratio = width as f64 / height.max(1) as f64;
 
-    // Strip EXIF: re-encoding through the image crate drops EXIF metadata
-    // Generate thumbnail (200x200 max)
     let thumbnail = img.thumbnail(200, 200);
     let mut thumb_bytes = Vec::new();
     thumbnail.write_to(
@@ -181,7 +170,6 @@ async fn process_image(
         image::ImageFormat::Jpeg,
     )?;
 
-    // Generate feed variant (800px wide max)
     let feed_img = if width > 800 {
         img.resize(800, (800.0 / aspect_ratio) as u32, image::imageops::FilterType::Lanczos3)
     } else {
@@ -193,7 +181,6 @@ async fn process_image(
         image::ImageFormat::Jpeg,
     )?;
 
-    // Generate display variant (1600px wide max)
     let display_img = if width > 1600 {
         img.resize(1600, (1600.0 / aspect_ratio) as u32, image::imageops::FilterType::Lanczos3)
     } else {
@@ -214,9 +201,9 @@ async fn process_image(
     let feed_key = format!("{}/feed.jpg", base_key);
     let display_key = format!("{}/display.jpg", base_key);
 
-    upload_bytes(s3_client, bucket, &thumb_key, &thumb_bytes, "image/jpeg").await?;
-    upload_bytes(s3_client, bucket, &feed_key, &feed_bytes, "image/jpeg").await?;
-    upload_bytes(s3_client, bucket, &display_key, &display_bytes, "image/jpeg").await?;
+    write_file(storage_base, &thumb_key, &thumb_bytes).await?;
+    write_file(storage_base, &feed_key, &feed_bytes).await?;
+    write_file(storage_base, &display_key, &display_bytes).await?;
 
     sqlx::query(
         r#"
@@ -243,14 +230,9 @@ async fn process_image(
 
 async fn process_video(
     pool: &PgPool,
-    _s3_client: &aws_sdk_s3::Client,
-    _bucket: &str,
     media_uuid: Uuid,
-    _original_key: &str,
     video_data: &[u8],
 ) -> JobResult {
-    // For v1, mark as completed with basic metadata.
-    // Full video transcoding with ffmpeg would be added as infrastructure matures.
     sqlx::query(
         r#"
         UPDATE media_items
@@ -267,22 +249,24 @@ async fn process_video(
     Ok(())
 }
 
-async fn upload_bytes(
-    client: &aws_sdk_s3::Client,
-    bucket: &str,
+async fn write_file(
+    storage_base: &Path,
     key: &str,
     data: &[u8],
-    content_type: &str,
 ) -> JobResult {
-    client
-        .put_object()
-        .bucket(bucket)
-        .key(key)
-        .body(data.to_vec().into())
-        .content_type(content_type)
-        .send()
+    let path = storage_base.join(key);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("mkdir failed for {}: {}", parent.display(), e))?;
+    }
+    let tmp_path = path.with_extension("tmp");
+    tokio::fs::write(&tmp_path, data)
         .await
-        .map_err(|e| format!("s3 upload failed for {}: {}", key, e))?;
+        .map_err(|e| format!("write failed for {}: {}", path.display(), e))?;
+    tokio::fs::rename(&tmp_path, &path)
+        .await
+        .map_err(|e| format!("rename failed for {}: {}", path.display(), e))?;
     Ok(())
 }
 

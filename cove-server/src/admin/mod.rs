@@ -15,8 +15,7 @@ pub struct AdminServiceImpl {
     pool: PgPool,
     jwt_secret: String,
     redis_conn: redis::aio::ConnectionManager,
-    s3_client: aws_sdk_s3::Client,
-    bucket: String,
+    storage: crate::storage::object_store::LocalStorageService,
 }
 
 impl AdminServiceImpl {
@@ -24,15 +23,13 @@ impl AdminServiceImpl {
         pool: PgPool,
         jwt_secret: String,
         redis_conn: redis::aio::ConnectionManager,
-        s3_client: aws_sdk_s3::Client,
-        bucket: String,
+        storage: crate::storage::object_store::LocalStorageService,
     ) -> Self {
         Self {
             pool,
             jwt_secret,
             redis_conn,
-            s3_client,
-            bucket,
+            storage,
         }
     }
 
@@ -306,13 +303,7 @@ impl AdminService for AdminServiceImpl {
                 .is_ok()
         };
 
-        let storage_healthy = self
-            .s3_client
-            .head_bucket()
-            .bucket(&self.bucket)
-            .send()
-            .await
-            .is_ok();
+        let storage_healthy = self.storage.health_check().await.is_ok();
 
         let active_users: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM users WHERE account_state = 'active'",

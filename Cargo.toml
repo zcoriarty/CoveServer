@@ -16,6 +16,7 @@ repository = "https://github.com/zacharycoriarty/CoveServer"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
 
 # gRPC / Protobuf
 tonic = { version = "0.12", features = ["tls"] }
@@ -28,10 +29,6 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid"
 
 # Redis
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-
-# S3-compatible object storage
-aws-sdk-s3 = "1"
-aws-config = "1"
 
 # Cryptography
 argon2 = "0.5"

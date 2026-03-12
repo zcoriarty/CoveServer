@@ -3,6 +3,7 @@
 //! notification delivery, EXIF stripping, thumbnail generation, and search indexing.
 
 use sqlx::{postgres::PgPoolOptions, Row};
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -21,10 +22,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("COVE_DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/cove".into());
     let redis_url =
         std::env::var("COVE_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
-    let s3_endpoint =
-        std::env::var("COVE_STORAGE_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:9000".into());
-    let s3_bucket =
-        std::env::var("COVE_STORAGE_BUCKET").unwrap_or_else(|_| "cove-media".into());
+    let storage_path =
+        std::env::var("COVE_STORAGE_DATA_PATH").unwrap_or_else(|_| "./data/media".into());
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -38,17 +37,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("failed to connect to Redis");
 
-    let s3_config = aws_config::from_env()
-        .endpoint_url(&s3_endpoint)
-        .load()
-        .await;
-    let s3_client = aws_sdk_s3::Client::new(&s3_config);
+    let storage_base = PathBuf::from(&storage_path);
+    tokio::fs::create_dir_all(&storage_base)
+        .await
+        .expect("failed to create storage directory");
+
+    tracing::info!(path = %storage_path, "local storage initialized");
 
     let worker = Worker {
         pool,
         redis_conn,
-        s3_client,
-        bucket: s3_bucket,
+        storage_base,
     };
 
     tracing::info!("worker polling started");
@@ -60,8 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Worker {
     pool: sqlx::PgPool,
     redis_conn: redis::aio::ConnectionManager,
-    s3_client: aws_sdk_s3::Client,
-    bucket: String,
+    storage_base: PathBuf,
 }
 
 impl Worker {
@@ -111,7 +109,7 @@ impl Worker {
             let result = match job_type.as_str() {
                 "feed_fanout" => handlers::handle_feed_fanout(&self.pool, &self.redis_conn, &payload).await,
                 "media_processing" => {
-                    handlers::handle_media_processing(&self.pool, &self.s3_client, &self.bucket, &payload).await
+                    handlers::handle_media_processing(&self.pool, &self.storage_base, &payload).await
                 }
                 "notification" => handlers::handle_notification(&self.pool, &payload).await,
                 other => {

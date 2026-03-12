@@ -69,15 +69,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("connected to Redis");
 
-    // --- S3 Object Storage ---
-    let s3_config = aws_config::from_env()
-        .endpoint_url(&config.storage.endpoint)
-        .region(aws_config::Region::new(config.storage.region.clone()))
-        .load()
-        .await;
-    let s3_client = aws_sdk_s3::Client::new(&s3_config);
+    // --- Local Storage ---
+    let storage = cove_server::storage::object_store::LocalStorageService::new(
+        &config.storage.data_path,
+    );
+    storage.init().await.expect("failed to initialize storage directory");
 
-    tracing::info!("S3 client initialized");
+    tracing::info!(path = %config.storage.data_path, "local storage initialized");
 
     // --- Crypto Services ---
     let password_hasher = Arc::new(PasswordHasher::new());
@@ -123,16 +121,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notification_svc = NotificationServiceImpl::new(pool.clone(), jwt_secret.clone());
     let media_svc = MediaServiceImpl::new(
         pool.clone(),
-        s3_client.clone(),
-        config.storage.bucket.clone(),
+        storage.clone(),
         jwt_secret.clone(),
     );
     let admin_svc = AdminServiceImpl::new(
         pool.clone(),
         jwt_secret.clone(),
         redis_conn.clone(),
-        s3_client.clone(),
-        config.storage.bucket.clone(),
+        storage.clone(),
     );
 
     // --- Health / Metrics Endpoint (HTTP on port 9090) ---

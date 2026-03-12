@@ -24,4 +24,6 @@ Thumbs.db
 # Docker volumes
 postgres-data/
 redis-data/
-minio-data/
+
+# Local media storage
+data/

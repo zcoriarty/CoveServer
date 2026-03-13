@@ -65,7 +65,12 @@ impl FeedServiceImpl {
                 .map(|(i, _)| format!("${}", i + 1))
                 .collect();
             let query = format!(
-                r#"SELECT u.id, u.username, u.display_name FROM users u WHERE u.id IN ({})"#,
+                r#"
+                SELECT u.id, u.username, u.display_name, p.avatar_media_id
+                FROM users u
+                LEFT JOIN profiles p ON p.user_id = u.id
+                WHERE u.id IN ({})
+                "#,
                 placeholders.join(", ")
             );
             let mut q = sqlx::query(&query);
@@ -82,11 +87,15 @@ impl FeedServiceImpl {
                 let id: uuid::Uuid = r.get(0);
                 let username: String = r.get(1);
                 let display_name: String = r.get(2);
+                let avatar_media_id: Option<uuid::Uuid> = r.get(3);
+                let avatar_url = avatar_media_id
+                    .map(|media_id| format!("/media/{}", media_id))
+                    .unwrap_or_default();
                 m.insert(id, UserSummary {
                     user_id: id.to_string(),
                     username,
                     display_name,
-                    avatar_url: String::new(),
+                    avatar_url,
                     is_following: false,
                 });
             }

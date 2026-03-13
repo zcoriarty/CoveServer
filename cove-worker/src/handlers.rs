@@ -74,6 +74,26 @@ pub async fn handle_feed_fanout(
     let author_key = format!("feed:home:{}", author_uuid);
     let _: Result<(), _> = redis::AsyncCommands::del(&mut conn, &author_key).await;
 
+    for follower_id in &follower_ids {
+        let notif_payload = serde_json::json!({
+            "recipient_id": follower_id.to_string(),
+            "actor_id": author_id,
+            "notification_type": "new_post",
+            "target_id": post_id,
+            "message": ""
+        });
+
+        let _ = sqlx::query(
+            r#"
+            INSERT INTO jobs (id, job_type, payload, state, run_at)
+            VALUES (gen_random_uuid(), 'notification', $1, 'pending', NOW())
+            "#,
+        )
+        .bind(sqlx::types::Json(&notif_payload))
+        .execute(pool)
+        .await;
+    }
+
     tracing::info!(
         post_id = post_id,
         follower_count = follower_ids.len(),

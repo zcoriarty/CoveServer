@@ -61,13 +61,16 @@ impl PostServiceImpl {
         let author_user_id: uuid::Uuid = author_row.get(0);
         let username: String = author_row.get(1);
         let display_name: String = author_row.get(2);
-        let _avatar_media_id: Option<uuid::Uuid> = author_row.get(3);
+        let avatar_media_id: Option<uuid::Uuid> = author_row.get(3);
+        let avatar_url = avatar_media_id
+            .map(|media_id| format!("/media/{}", media_id))
+            .unwrap_or_default();
 
         let author = UserSummary {
             user_id: author_user_id.to_string(),
             username,
             display_name,
-            avatar_url: String::new(),
+            avatar_url,
             is_following: false,
         };
 

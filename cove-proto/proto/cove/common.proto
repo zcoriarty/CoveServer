@@ -45,3 +45,9 @@ enum Visibility {
   VISIBILITY_FOLLOWERS = 1;
   VISIBILITY_PRIVATE = 2;
 }
+
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+  string display_name = 3;
+}

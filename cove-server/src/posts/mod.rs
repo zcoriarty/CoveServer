@@ -3,7 +3,7 @@
 use crate::auth;
 use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{FeedEntryId, MediaId, PostId, UserId};
-use cove_proto::cove::common::{MediaReference, MediaType, UserSummary, Visibility};
+use cove_proto::cove::common::{Location, MediaReference, MediaType, UserSummary, Visibility};
 use cove_proto::cove::post::{
     post_service_server::PostService, CreatePostRequest, CreatePostResponse, DeletePostRequest,
     DeletePostResponse, EditCaptionRequest, EditCaptionResponse, GetPostRequest, GetPostResponse,
@@ -43,6 +43,9 @@ impl PostServiceImpl {
         created_at: chrono::DateTime<chrono::Utc>,
         edited_at: Option<chrono::DateTime<chrono::Utc>>,
         liked_by_viewer: bool,
+        location_lat: Option<f64>,
+        location_lng: Option<f64>,
+        location_name: Option<String>,
     ) -> CoveResult<PostDetail> {
         let author_row = sqlx::query(
             r#"
@@ -115,6 +118,15 @@ impl PostServiceImpl {
             _ => Visibility::Unspecified as i32,
         };
 
+        let location = match (location_lat, location_lng) {
+            (Some(lat), Some(lng)) => Some(Location {
+                latitude: lat,
+                longitude: lng,
+                display_name: location_name.unwrap_or_default(),
+            }),
+            _ => None,
+        };
+
         Ok(PostDetail {
             post_id: post_id.to_string(),
             author: Some(author),
@@ -133,6 +145,7 @@ impl PostServiceImpl {
                 seconds: t.timestamp(),
                 nanos: t.timestamp_subsec_nanos() as i32,
             }),
+            location,
         })
     }
 }
@@ -169,10 +182,20 @@ impl PostService for PostServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        let (loc_lat, loc_lng, loc_name) = if let Some(ref loc) = req.location {
+            if loc.latitude != 0.0 || loc.longitude != 0.0 {
+                (Some(loc.latitude), Some(loc.longitude), Some(loc.display_name.clone()))
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
         sqlx::query(
             r#"
-            INSERT INTO posts (id, author_id, caption, visibility, post_type, created_at)
-            VALUES ($1, $2, $3, $4, 'photo', $5)
+            INSERT INTO posts (id, author_id, caption, visibility, post_type, created_at, location_lat, location_lng, location_name)
+            VALUES ($1, $2, $3, $4, 'photo', $5, $6, $7, $8)
             "#,
         )
         .bind(post_id.as_uuid())
@@ -180,6 +203,9 @@ impl PostService for PostServiceImpl {
         .bind(req.caption.as_str())
         .bind(visibility)
         .bind(created_at)
+        .bind(loc_lat)
+        .bind(loc_lng)
+        .bind(loc_name.as_deref())
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
@@ -281,7 +307,7 @@ impl PostService for PostServiceImpl {
         let post_row = sqlx::query(
             r#"
             SELECT id, author_id, caption, visibility, like_count, comment_count, share_count,
-                   created_at, edited_at, is_deleted
+                   created_at, edited_at, is_deleted, location_lat, location_lng, location_name
             FROM posts
             WHERE id = $1
             "#,
@@ -302,6 +328,9 @@ impl PostService for PostServiceImpl {
         let created_at: chrono::DateTime<chrono::Utc> = post_row.get(7);
         let edited_at: Option<chrono::DateTime<chrono::Utc>> = post_row.get(8);
         let is_deleted: bool = post_row.get(9);
+        let location_lat: Option<f64> = post_row.get(10);
+        let location_lng: Option<f64> = post_row.get(11);
+        let location_name: Option<String> = post_row.get(12);
 
         if is_deleted {
             return Err(Status::not_found("post not found"));
@@ -360,6 +389,9 @@ impl PostService for PostServiceImpl {
             created_at,
             edited_at,
             liked_by_viewer,
+            location_lat,
+            location_lng,
+            location_name,
         )
         .await
         .map_err(|e| Status::internal(e.to_string()))?;

@@ -56,6 +56,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ./migrations/004_add_post_location.sql:/docker-entrypoint-initdb.d/004_add_post_location.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cove -d cove"]
       interval: 5s

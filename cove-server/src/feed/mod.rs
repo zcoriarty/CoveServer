@@ -4,7 +4,7 @@ use crate::auth;
 use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{FeedEntryId, PostId, UserId};
 use cove_common::pagination::{CursorValue, PaginationParams};
-use cove_proto::cove::common::{MediaReference, MediaType, UserSummary, Visibility};
+use cove_proto::cove::common::{Location, MediaReference, MediaType, UserSummary, Visibility};
 use cove_proto::cove::feed::{
     feed_service_server::FeedService, FeedItem, GetHomeFeedRequest, GetHomeFeedResponse,
 };
@@ -179,6 +179,15 @@ impl FeedServiceImpl {
                 _ => Visibility::Unspecified as i32,
             };
 
+            let location = match (row.location_lat, row.location_lng) {
+                (Some(lat), Some(lng)) => Some(Location {
+                    latitude: lat,
+                    longitude: lng,
+                    display_name: row.location_name.clone().unwrap_or_default(),
+                }),
+                _ => None,
+            };
+
             let post_detail = PostDetail {
                 post_id: row.post_id.to_string(),
                 author: Some(author),
@@ -197,6 +206,7 @@ impl FeedServiceImpl {
                     seconds: t.timestamp(),
                     nanos: t.timestamp_subsec_nanos() as i32,
                 }),
+                location,
             };
 
             items.push(FeedItem {
@@ -220,6 +230,9 @@ struct FeedEntryRow {
     share_count: i32,
     post_created_at: chrono::DateTime<chrono::Utc>,
     edited_at: Option<chrono::DateTime<chrono::Utc>>,
+    location_lat: Option<f64>,
+    location_lng: Option<f64>,
+    location_name: Option<String>,
 }
 
 /// Feed fanout: inserts feed_entries for all accepted followers of the author.
@@ -294,7 +307,7 @@ impl FeedService for FeedServiceImpl {
                 r#"
                 SELECT fe.id, fe.created_at, p.id as post_id, p.author_id, p.caption, p.visibility,
                        p.like_count, p.comment_count, p.share_count, p.created_at as post_created_at,
-                       p.edited_at
+                       p.edited_at, p.location_lat, p.location_lng, p.location_name
                 FROM feed_entries fe
                 JOIN posts p ON p.id = fe.post_id AND NOT p.is_deleted
                 WHERE fe.user_id = $1 AND (fe.created_at, fe.id) < ($2, $3)
@@ -313,7 +326,7 @@ impl FeedService for FeedServiceImpl {
                 r#"
                 SELECT fe.id, fe.created_at, p.id as post_id, p.author_id, p.caption, p.visibility,
                        p.like_count, p.comment_count, p.share_count, p.created_at as post_created_at,
-                       p.edited_at
+                       p.edited_at, p.location_lat, p.location_lng, p.location_name
                 FROM feed_entries fe
                 JOIN posts p ON p.id = fe.post_id AND NOT p.is_deleted
                 WHERE fe.user_id = $1
@@ -349,6 +362,9 @@ impl FeedService for FeedServiceImpl {
                 share_count: r.get(8),
                 post_created_at: r.get(9),
                 edited_at: r.get(10),
+                location_lat: r.get(11),
+                location_lng: r.get(12),
+                location_name: r.get(13),
             })
             .collect();
 

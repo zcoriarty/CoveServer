@@ -16,6 +16,7 @@ message CreatePostRequest {
   string caption = 1;
   cove.common.Visibility visibility = 2;
   repeated string media_ids = 3;
+  cove.common.Location location = 4;
 }
 
 message CreatePostResponse {
@@ -43,6 +44,7 @@ message PostDetail {
   cove.common.Visibility visibility = 9;
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp edited_at = 11;
+  cove.common.Location location = 12;
 }
 
 message DeletePostRequest {

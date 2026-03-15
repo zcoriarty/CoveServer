@@ -258,25 +258,32 @@ impl CommentService for CommentServiceImpl {
             let author_ids: Vec<uuid::Uuid> = truncated
                 .iter()
                 .map(|r| r.1)
-                .fold(vec![], |mut acc, id| {
-                    if !acc.contains(&id) {
-                        acc.push(id);
-                    }
-                    acc
-                });
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
 
-            let mut author_map: std::collections::HashMap<uuid::Uuid, (String, String)> =
+            let mut author_map: std::collections::HashMap<uuid::Uuid, (String, String, String)> =
                 std::collections::HashMap::new();
 
-            for aid in &author_ids {
-                if let Ok(row) = sqlx::query_as::<_, (String, String)>(
-                    "SELECT u.username, COALESCE(u.display_name, '') FROM users u WHERE u.id = $1",
+            if !author_ids.is_empty() {
+                let author_rows = sqlx::query_as::<_, (uuid::Uuid, String, String, Option<uuid::Uuid>)>(
+                    r#"
+                    SELECT u.id, u.username, COALESCE(u.display_name, ''), p.avatar_media_id
+                    FROM users u
+                    LEFT JOIN profiles p ON p.user_id = u.id
+                    WHERE u.id = ANY($1)
+                    "#,
                 )
-                .bind(aid)
-                .fetch_one(&self.pool)
+                .bind(&author_ids)
+                .fetch_all(&self.pool)
                 .await
-                {
-                    author_map.insert(*aid, row);
+                .unwrap_or_default();
+
+                for (user_id, username, display_name, avatar_media_id) in author_rows {
+                    let avatar_url = avatar_media_id
+                        .map(|media_id| format!("/media/{}", media_id))
+                        .unwrap_or_default();
+                    author_map.insert(user_id, (username, display_name, avatar_url));
                 }
             }
 
@@ -298,7 +305,7 @@ impl CommentService for CommentServiceImpl {
             truncated
                 .iter()
                 .map(|(id, author_id, body, parent_id, reply_count, created_at)| {
-                    let (username, display_name) = author_map
+                    let (username, display_name, avatar_url) = author_map
                         .get(author_id)
                         .cloned()
                         .unwrap_or_default();
@@ -306,7 +313,7 @@ impl CommentService for CommentServiceImpl {
                         &UserId::from_uuid(*author_id),
                         username,
                         display_name,
-                        String::new(),
+                        avatar_url,
                         following_set.contains(author_id),
                     );
                     CommentDetail {

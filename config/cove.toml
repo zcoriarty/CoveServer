@@ -29,3 +29,11 @@ max_upload_bytes = 52428800         # 50 MiB
 max_video_duration_secs = 60
 allowed_image_types = ["image/jpeg", "image/png", "image/webp"]
 allowed_video_types = ["video/mp4", "video/quicktime"]
+
+[push]
+enabled = false
+apns_key_id = ""
+apns_team_id = ""
+apns_bundle_id = ""
+apns_private_key_path = "./secrets/AuthKey.p8"
+default_environment = "development"

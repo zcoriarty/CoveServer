@@ -63,6 +63,7 @@ async-trait = { workspace = true }
 derive_more = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
+reqwest = { workspace = true }
 
 # Image processing
 image = { workspace = true }

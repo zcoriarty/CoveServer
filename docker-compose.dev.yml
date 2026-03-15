@@ -11,10 +11,17 @@ services:
       COVE__REDIS__URL: "redis://redis:6379/"
       COVE__STORAGE__DATA_PATH: "/opt/cove/data/media"
       COVE__AUTH__JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
+      COVE__PUSH__ENABLED: "${COVE_PUSH__ENABLED:-false}"
+      COVE__PUSH__APNS_KEY_ID: "${COVE_PUSH__APNS_KEY_ID:-}"
+      COVE__PUSH__APNS_TEAM_ID: "${COVE_PUSH__APNS_TEAM_ID:-}"
+      COVE__PUSH__APNS_BUNDLE_ID: "${COVE_PUSH__APNS_BUNDLE_ID:-}"
+      COVE__PUSH__APNS_PRIVATE_KEY_PATH: "/run/secrets/apns_auth_key.p8"
+      COVE__PUSH__DEFAULT_ENVIRONMENT: "${COVE_PUSH__DEFAULT_ENVIRONMENT:-development}"
     ports:
       - "0.0.0.0:50051:50051"
     volumes:
       - media-data:/opt/cove/data/media
+      - "${COVE_PUSH__APNS_PRIVATE_KEY_PATH:-/dev/null}:/run/secrets/apns_auth_key.p8:ro"
     depends_on:
       postgres:
         condition: service_healthy

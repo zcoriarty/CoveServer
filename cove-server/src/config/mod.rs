@@ -15,6 +15,7 @@ pub struct CoveConfig {
     pub auth: AuthConfig,
     pub crypto: CryptoConfig,
     pub media: MediaConfig,
+    pub push: PushConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -60,6 +61,16 @@ pub struct MediaConfig {
     pub allowed_video_types: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct PushConfig {
+    pub enabled: bool,
+    pub apns_key_id: String,
+    pub apns_team_id: String,
+    pub apns_bundle_id: String,
+    pub apns_private_key_path: PathBuf,
+    pub default_environment: String,
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -98,7 +109,7 @@ impl Default for StorageConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            access_token_ttl_secs: 900,   // 15 minutes
+            access_token_ttl_secs: 900,      // 15 minutes
             refresh_token_ttl_secs: 604_800, // 7 days
             jwt_secret: "change-me-in-production".to_string(),
         }
@@ -123,10 +134,20 @@ impl Default for MediaConfig {
                 "image/png".to_string(),
                 "image/webp".to_string(),
             ],
-            allowed_video_types: vec![
-                "video/mp4".to_string(),
-                "video/quicktime".to_string(),
-            ],
+            allowed_video_types: vec!["video/mp4".to_string(), "video/quicktime".to_string()],
+        }
+    }
+}
+
+impl Default for PushConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            apns_key_id: String::new(),
+            apns_team_id: String::new(),
+            apns_bundle_id: String::new(),
+            apns_private_key_path: PathBuf::from("./secrets/AuthKey.p8"),
+            default_environment: "development".to_string(),
         }
     }
 }
@@ -137,8 +158,8 @@ impl CoveConfig {
     pub fn load() -> Result<Self, config::ConfigError> {
         let default_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://localhost/cove".to_string());
-        let default_redis = std::env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+        let default_redis =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
 
         let cfg = config::Config::builder()
             .set_default("server.host", "0.0.0.0")?
@@ -162,9 +183,13 @@ impl CoveConfig {
                 "media.allowed_video_types",
                 vec!["video/mp4", "video/quicktime"],
             )?
-            .add_source(
-                config::File::with_name("config").required(false),
-            )
+            .set_default("push.enabled", false)?
+            .set_default("push.apns_key_id", "")?
+            .set_default("push.apns_team_id", "")?
+            .set_default("push.apns_bundle_id", "")?
+            .set_default("push.apns_private_key_path", "./secrets/AuthKey.p8")?
+            .set_default("push.default_environment", "development")?
+            .add_source(config::File::with_name("config").required(false))
             .add_source(
                 config::Environment::with_prefix("COVE")
                     .separator("__")

@@ -12,6 +12,7 @@ use cove_server::media::MediaServiceImpl;
 use cove_server::notifications::NotificationServiceImpl;
 use cove_server::posts::PostServiceImpl;
 use cove_server::profiles::ProfileServiceImpl;
+use cove_server::push::PushService;
 use cove_server::search::SearchServiceImpl;
 use cove_server::sharing::ShareServiceImpl;
 use cove_server::social_graph::FollowServiceImpl;
@@ -70,10 +71,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("connected to Redis");
 
     // --- Local Storage ---
-    let storage = cove_server::storage::object_store::LocalStorageService::new(
-        &config.storage.data_path,
-    );
-    storage.init().await.expect("failed to initialize storage directory");
+    let storage =
+        cove_server::storage::object_store::LocalStorageService::new(&config.storage.data_path);
+    storage
+        .init()
+        .await
+        .expect("failed to initialize storage directory");
 
     tracing::info!(path = %config.storage.data_path, "local storage initialized");
 
@@ -101,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- gRPC Service Impls ---
     let jwt_secret = config.auth.jwt_secret.clone();
+    let push_service = Arc::new(PushService::new(pool.clone(), &config.push));
 
     let auth_svc = AuthServiceImpl::new(
         pool.clone(),
@@ -111,19 +115,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let user_svc = UserServiceImpl::new(pool.clone(), jwt_secret.clone(), password_hasher.clone());
     let profile_svc = ProfileServiceImpl::new(pool.clone(), jwt_secret.clone());
-    let follow_svc = FollowServiceImpl::new(pool.clone(), jwt_secret.clone());
+    let follow_svc = FollowServiceImpl::new(pool.clone(), jwt_secret.clone(), push_service.clone());
     let post_svc = PostServiceImpl::new(pool.clone(), redis_conn.clone(), jwt_secret.clone());
     let feed_svc = FeedServiceImpl::new(pool.clone(), redis_conn.clone(), jwt_secret.clone());
     let comment_svc = CommentServiceImpl::new(pool.clone(), jwt_secret.clone());
     let like_svc = LikeServiceImpl::new(pool.clone(), jwt_secret.clone());
     let share_svc = ShareServiceImpl::new(pool.clone(), jwt_secret.clone());
     let search_svc = SearchServiceImpl::new(pool.clone(), jwt_secret.clone());
-    let notification_svc = NotificationServiceImpl::new(pool.clone(), jwt_secret.clone());
-    let media_svc = MediaServiceImpl::new(
-        pool.clone(),
-        storage.clone(),
-        jwt_secret.clone(),
-    );
+    let notification_svc =
+        NotificationServiceImpl::new(pool.clone(), jwt_secret.clone(), push_service.clone());
+    let media_svc = MediaServiceImpl::new(pool.clone(), storage.clone(), jwt_secret.clone());
     let admin_svc = AdminServiceImpl::new(
         pool.clone(),
         jwt_secret.clone(),
@@ -182,4 +183,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

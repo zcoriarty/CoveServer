@@ -1,29 +1,36 @@
 //! Follow service and gRPC handler.
 
 use crate::auth;
+use crate::push::PushService;
 use cove_common::auth_context::AuthContext;
 use cove_common::id::UserId;
 use cove_common::pagination::{CursorValue, PaginationParams};
-use cove_proto::cove::common::{UserSummary, PaginationResponse};
+use cove_proto::cove::common::{PaginationResponse, UserSummary};
 use cove_proto::cove::follow::{
     follow_service_server::FollowService, AcceptFollowRequestReq, AcceptFollowRequestResp,
-    FollowRequest, FollowResponse, FollowState, GetFollowersRequest, GetFollowersResponse,
-    GetFollowingRequest, GetFollowingResponse, GetFollowStatusRequest, GetFollowStatusResponse,
+    FollowRequest, FollowResponse, FollowState, GetFollowStatusRequest, GetFollowStatusResponse,
+    GetFollowersRequest, GetFollowersResponse, GetFollowingRequest, GetFollowingResponse,
     GetPendingRequestsRequest, GetPendingRequestsResponse, PendingFollowRequest,
     RejectFollowRequestReq, RejectFollowRequestResp, UnfollowRequest, UnfollowResponse,
 };
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row};
+use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 /// Follow service implementation.
 pub struct FollowServiceImpl {
     pool: PgPool,
     jwt_secret: String,
+    push: Arc<PushService>,
 }
 
 impl FollowServiceImpl {
-    pub fn new(pool: PgPool, jwt_secret: String) -> Self {
-        Self { pool, jwt_secret }
+    pub fn new(pool: PgPool, jwt_secret: String, push: Arc<PushService>) -> Self {
+        Self {
+            pool,
+            jwt_secret,
+            push,
+        }
     }
 
     fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<AuthContext, Status> {
@@ -37,6 +44,55 @@ impl FollowServiceImpl {
             "blocked" => FollowState::Blocked as i32,
             _ => FollowState::None as i32,
         }
+    }
+
+    async fn backfill_home_feed_for_follow(
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+        follower_id: &UserId,
+        followee_id: &UserId,
+    ) -> Result<(), Status> {
+        sqlx::query(
+            r#"
+            INSERT INTO feed_entries (id, user_id, post_id, created_at)
+            SELECT gen_random_uuid(), $1, p.id, p.created_at
+            FROM posts p
+            WHERE p.author_id = $2
+              AND p.visibility = 'followers'
+              AND NOT p.is_deleted
+            ON CONFLICT (user_id, post_id) DO NOTHING
+            "#,
+        )
+        .bind(follower_id.as_uuid())
+        .bind(followee_id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| Status::internal("database error"))?;
+
+        Ok(())
+    }
+
+    async fn remove_followee_posts_from_home_feed(
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+        follower_id: &UserId,
+        followee_id: &UserId,
+    ) -> Result<(), Status> {
+        sqlx::query(
+            r#"
+            DELETE FROM feed_entries fe
+            USING posts p
+            WHERE fe.post_id = p.id
+              AND fe.user_id = $1
+              AND p.author_id = $2
+              AND p.visibility = 'followers'
+            "#,
+        )
+        .bind(follower_id.as_uuid())
+        .bind(followee_id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| Status::internal("database error"))?;
+
+        Ok(())
     }
 }
 
@@ -56,33 +112,29 @@ impl FollowService for FollowServiceImpl {
             return Err(Status::invalid_argument("cannot follow self"));
         }
 
-        let existing = sqlx::query(
-            r#"SELECT state FROM follows WHERE follower_id = $1 AND followee_id = $2"#,
-        )
-        .bind(auth.user_id.as_uuid())
-        .bind(target_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| Status::internal("database error"))?;
+        let existing =
+            sqlx::query(r#"SELECT state FROM follows WHERE follower_id = $1 AND followee_id = $2"#)
+                .bind(auth.user_id.as_uuid())
+                .bind(target_id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| Status::internal("database error"))?;
 
         if let Some(row) = existing {
             let state: String = row.get(0);
-            if state == "accepted" {
-                return Ok(Response::new(FollowResponse {
-                    state: FollowState::Accepted as i32,
-                }));
+            let proto_state = Self::state_to_proto(&state);
+            if proto_state != FollowState::None as i32 {
+                return Ok(Response::new(FollowResponse { state: proto_state }));
             }
         }
 
-        let is_private: bool = sqlx::query(
-            r#"SELECT is_private FROM profiles WHERE user_id = $1"#,
-        )
-        .bind(target_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| Status::internal("database error"))?
-        .map(|r| r.get::<bool, _>(0))
-        .unwrap_or(true);
+        let is_private: bool = sqlx::query(r#"SELECT is_private FROM profiles WHERE user_id = $1"#)
+            .bind(target_id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Status::internal("database error"))?
+            .map(|r| r.get::<bool, _>(0))
+            .unwrap_or(true);
 
         let state = if is_private { "pending" } else { "accepted" };
         let accepted_at = if is_private {
@@ -90,8 +142,13 @@ impl FollowService for FollowServiceImpl {
         } else {
             Some(chrono::Utc::now())
         };
+        let mut follow_request_inserted = false;
 
-        let mut tx = self.pool.begin().await.map_err(|e| Status::internal("database error"))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal("database error"))?;
 
         sqlx::query(
             r#"
@@ -131,9 +188,51 @@ impl FollowService for FollowServiceImpl {
             .execute(&mut *tx)
             .await
             .map_err(|e| Status::internal("database error"))?;
+
+            Self::backfill_home_feed_for_follow(&mut tx, &auth.user_id, &target_id).await?;
+        } else {
+            let inserted = sqlx::query(
+                r#"
+                INSERT INTO notifications (id, recipient_id, actor_id, notification_type, target_type, target_id, message, is_read, created_at)
+                SELECT gen_random_uuid(), $1, $2, 'follow_request', 'user', $3, '', FALSE, NOW()
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM notifications
+                    WHERE recipient_id = $1
+                      AND actor_id = $2
+                      AND notification_type = 'follow_request'
+                      AND target_id = $3
+                      AND NOT is_read
+                )
+                "#,
+            )
+            .bind(target_id.as_uuid())
+            .bind(auth.user_id.as_uuid())
+            .bind(auth.user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal("database error"))?;
+            follow_request_inserted = inserted.rows_affected() > 0;
         }
 
-        tx.commit().await.map_err(|e| Status::internal("database error"))?;
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal("database error"))?;
+
+        if follow_request_inserted {
+            if let Err(error) = self
+                .push
+                .send_follow_request_push(target_id, auth.user_id)
+                .await
+            {
+                tracing::warn!(
+                    error = %error,
+                    recipient_id = %target_id,
+                    actor_id = %auth.user_id,
+                    "failed to send follow request push"
+                );
+            }
+        }
 
         let proto_state = if state == "accepted" {
             FollowState::Accepted as i32
@@ -154,7 +253,11 @@ impl FollowService for FollowServiceImpl {
         let target_id = UserId::parse(&req.target_user_id)
             .map_err(|_| Status::invalid_argument("invalid target_user_id"))?;
 
-        let mut tx = self.pool.begin().await.map_err(|e| Status::internal("database error"))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal("database error"))?;
 
         let row = sqlx::query(
             r#"
@@ -183,6 +286,27 @@ impl FollowService for FollowServiceImpl {
                 sqlx::query(
                     r#"UPDATE profiles SET following_count = following_count - 1 WHERE user_id = $1"#,
                 )
+            .bind(auth.user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal("database error"))?;
+
+                Self::remove_followee_posts_from_home_feed(&mut tx, &auth.user_id, &target_id)
+                    .await?;
+            } else if state == "pending" {
+                // Treat canceling an outgoing follow request as resolving the stale request notification,
+                // so a future re-request can generate a fresh notification and push.
+                sqlx::query(
+                    r#"
+                    UPDATE notifications
+                    SET is_read = TRUE
+                    WHERE recipient_id = $1
+                      AND actor_id = $2
+                      AND notification_type = 'follow_request'
+                      AND NOT is_read
+                    "#,
+                )
+                .bind(target_id.as_uuid())
                 .bind(auth.user_id.as_uuid())
                 .execute(&mut *tx)
                 .await
@@ -190,7 +314,9 @@ impl FollowService for FollowServiceImpl {
             }
         }
 
-        tx.commit().await.map_err(|e| Status::internal("database error"))?;
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal("database error"))?;
 
         Ok(Response::new(UnfollowResponse {}))
     }
@@ -205,7 +331,11 @@ impl FollowService for FollowServiceImpl {
         let follower_id = UserId::parse(&req.follower_user_id)
             .map_err(|_| Status::invalid_argument("invalid follower_user_id"))?;
 
-        let mut tx = self.pool.begin().await.map_err(|e| Status::internal("database error"))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal("database error"))?;
 
         let row = sqlx::query(
             r#"
@@ -241,7 +371,65 @@ impl FollowService for FollowServiceImpl {
         .await
         .map_err(|e| Status::internal("database error"))?;
 
-        tx.commit().await.map_err(|e| Status::internal("database error"))?;
+        sqlx::query(
+            r#"
+            UPDATE notifications
+            SET is_read = TRUE
+            WHERE recipient_id = $1
+              AND actor_id = $2
+              AND notification_type = 'follow_request'
+              AND NOT is_read
+            "#,
+        )
+        .bind(auth.user_id.as_uuid())
+        .bind(follower_id.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal("database error"))?;
+
+        Self::backfill_home_feed_for_follow(&mut tx, &follower_id, &auth.user_id).await?;
+
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO notifications (id, recipient_id, actor_id, notification_type, target_type, target_id, message, is_read, created_at)
+            SELECT gen_random_uuid(), $1, $2, 'follow_accepted', 'user', $3, '', FALSE, NOW()
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM notifications
+                WHERE recipient_id = $1
+                  AND actor_id = $2
+                  AND notification_type = 'follow_accepted'
+                  AND target_id = $3
+                  AND NOT is_read
+            )
+            "#,
+        )
+        .bind(follower_id.as_uuid())
+        .bind(auth.user_id.as_uuid())
+        .bind(auth.user_id.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal("database error"))?;
+        let follow_accepted_inserted = inserted.rows_affected() > 0;
+
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal("database error"))?;
+
+        if follow_accepted_inserted {
+            if let Err(error) = self
+                .push
+                .send_follow_accepted_push(follower_id, auth.user_id)
+                .await
+            {
+                tracing::warn!(
+                    error = %error,
+                    recipient_id = %follower_id,
+                    actor_id = %auth.user_id,
+                    "failed to send follow accepted push"
+                );
+            }
+        }
 
         Ok(Response::new(AcceptFollowRequestResp {}))
     }
@@ -268,6 +456,22 @@ impl FollowService for FollowServiceImpl {
         .await
         .map_err(|e| Status::internal("database error"))?;
 
+        sqlx::query(
+            r#"
+            UPDATE notifications
+            SET is_read = TRUE
+            WHERE recipient_id = $1
+              AND actor_id = $2
+              AND notification_type = 'follow_request'
+              AND NOT is_read
+            "#,
+        )
+        .bind(auth.user_id.as_uuid())
+        .bind(follower_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Status::internal("database error"))?;
+
         Ok(Response::new(RejectFollowRequestResp {}))
     }
 
@@ -278,22 +482,18 @@ impl FollowService for FollowServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target_id = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target_id =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
 
         let is_own = auth.user_id == target_id;
         if !is_own {
-            let profile = sqlx::query(
-                r#"SELECT is_private FROM profiles WHERE user_id = $1"#,
-            )
-            .bind(target_id.as_uuid())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| Status::internal("database error"))?;
+            let profile = sqlx::query(r#"SELECT is_private FROM profiles WHERE user_id = $1"#)
+                .bind(target_id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| Status::internal("database error"))?;
 
-            let is_private: bool = profile
-                .map(|r| r.get(0))
-                .unwrap_or(true);
+            let is_private: bool = profile.map(|r| r.get(0)).unwrap_or(true);
 
             if is_private {
                 let following = sqlx::query(
@@ -316,9 +516,10 @@ impl FollowService for FollowServiceImpl {
             }
         }
 
-        let (page_size, cursor_str) = req.pagination.as_ref().map_or((20, ""), |p| {
-            (p.page_size.clamp(1, 50), p.cursor.as_str())
-        });
+        let (page_size, cursor_str) = req
+            .pagination
+            .as_ref()
+            .map_or((20, ""), |p| (p.page_size.clamp(1, 50), p.cursor.as_str()));
         let pagination = PaginationParams::from_proto(page_size, cursor_str);
 
         let (rows, has_more) = if let Some(cursor) = &pagination.cursor {
@@ -426,18 +627,16 @@ impl FollowService for FollowServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target_id = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target_id =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
 
         let is_own = auth.user_id == target_id;
         if !is_own {
-            let profile = sqlx::query(
-                r#"SELECT is_private FROM profiles WHERE user_id = $1"#,
-            )
-            .bind(target_id.as_uuid())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| Status::internal("database error"))?;
+            let profile = sqlx::query(r#"SELECT is_private FROM profiles WHERE user_id = $1"#)
+                .bind(target_id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| Status::internal("database error"))?;
 
             let is_private: bool = profile.map(|r| r.get(0)).unwrap_or(true);
 
@@ -462,9 +661,10 @@ impl FollowService for FollowServiceImpl {
             }
         }
 
-        let (page_size, cursor_str) = req.pagination.as_ref().map_or((20, ""), |p| {
-            (p.page_size.clamp(1, 50), p.cursor.as_str())
-        });
+        let (page_size, cursor_str) = req
+            .pagination
+            .as_ref()
+            .map_or((20, ""), |p| (p.page_size.clamp(1, 50), p.cursor.as_str()));
         let pagination = PaginationParams::from_proto(page_size, cursor_str);
 
         let (rows, has_more) = if let Some(cursor) = &pagination.cursor {
@@ -572,9 +772,10 @@ impl FollowService for FollowServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let (page_size, cursor_str) = req.pagination.as_ref().map_or((20, ""), |p| {
-            (p.page_size.clamp(1, 50), p.cursor.as_str())
-        });
+        let (page_size, cursor_str) = req
+            .pagination
+            .as_ref()
+            .map_or((20, ""), |p| (p.page_size.clamp(1, 50), p.cursor.as_str()));
         let pagination = PaginationParams::from_proto(page_size, cursor_str);
 
         let (rows, has_more) = if let Some(cursor) = &pagination.cursor {
@@ -587,7 +788,7 @@ impl FollowService for FollowServiceImpl {
                 WHERE f.followee_id = $1 AND f.state = 'pending'
                   AND u.account_state = 'active'
                   AND (f.created_at, f.follower_id) < ($2, $3)
-                ORDER BY f.created_at ASC, f.follower_id ASC
+                ORDER BY f.created_at DESC, f.follower_id DESC
                 LIMIT $4
                 "#,
             )
@@ -611,7 +812,7 @@ impl FollowService for FollowServiceImpl {
                 LEFT JOIN profiles p ON u.id = p.user_id
                 WHERE f.followee_id = $1 AND f.state = 'pending'
                   AND u.account_state = 'active'
-                ORDER BY f.created_at ASC, f.follower_id ASC
+                ORDER BY f.created_at DESC, f.follower_id DESC
                 LIMIT $2
                 "#,
             )

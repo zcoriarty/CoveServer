@@ -14,6 +14,7 @@ pub mod media;
 pub mod notifications;
 pub mod posts;
 pub mod profiles;
+pub mod push;
 pub mod search;
 pub mod sharing;
 pub mod social_graph;

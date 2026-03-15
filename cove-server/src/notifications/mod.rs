@@ -2,15 +2,17 @@
 
 use crate::auth;
 use crate::authorization::build_user_summary;
+use crate::push::PushService;
 use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{NotificationId, UserId};
 use cove_common::pagination::{CursorValue, PaginationParams};
 use cove_proto::cove::notification::{
     notification_service_server::NotificationService, GetUnreadCountRequest,
-    GetUnreadCountResponse, ListNotificationsRequest, ListNotificationsResponse,
-    MarkReadRequest, MarkReadResponse, NotificationItem, NotificationType,
+    GetUnreadCountResponse, ListNotificationsRequest, ListNotificationsResponse, MarkReadRequest,
+    MarkReadResponse, NotificationItem, NotificationType,
 };
 use sqlx::PgPool;
+use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -18,14 +20,22 @@ use uuid::Uuid;
 pub struct NotificationServiceImpl {
     pub pool: PgPool,
     pub jwt_secret: String,
+    push: Arc<PushService>,
 }
 
 impl NotificationServiceImpl {
-    pub fn new(pool: PgPool, jwt_secret: String) -> Self {
-        Self { pool, jwt_secret }
+    pub fn new(pool: PgPool, jwt_secret: String, push: Arc<PushService>) -> Self {
+        Self {
+            pool,
+            jwt_secret,
+            push,
+        }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 
@@ -81,11 +91,21 @@ impl NotificationService for NotificationServiceImpl {
         request: Request<ListNotificationsRequest>,
     ) -> Result<Response<ListNotificationsResponse>, Status> {
         let auth = self.auth(request.metadata())?;
+        if let Err(error) = self
+            .push
+            .sync_token_from_metadata(&auth, request.metadata())
+            .await
+        {
+            tracing::warn!(error = %error, "failed syncing push token metadata");
+        }
         let req = request.into_inner();
 
         let pagination = PaginationParams::from_proto(
             req.pagination.as_ref().map(|p| p.page_size).unwrap_or(20),
-            req.pagination.as_ref().map(|p| p.cursor.as_str()).unwrap_or(""),
+            req.pagination
+                .as_ref()
+                .map(|p| p.cursor.as_str())
+                .unwrap_or(""),
         );
 
         let limit = (pagination.limit + 1) as i64;
@@ -138,15 +158,16 @@ impl NotificationService for NotificationServiceImpl {
         let has_more = rows.len() as i64 > pagination.limit as i64;
         let truncated: Vec<_> = rows.iter().take(pagination.limit as usize).collect();
 
-        let actor_ids: Vec<uuid::Uuid> = truncated
-            .iter()
-            .filter_map(|r| r.2)
-            .fold(vec![], |mut acc, id| {
-                if !acc.contains(&id) {
-                    acc.push(id);
-                }
-                acc
-            });
+        let actor_ids: Vec<uuid::Uuid> =
+            truncated
+                .iter()
+                .filter_map(|r| r.2)
+                .fold(vec![], |mut acc, id| {
+                    if !acc.contains(&id) {
+                        acc.push(id);
+                    }
+                    acc
+                });
 
         let mut actor_map: std::collections::HashMap<uuid::Uuid, (String, String)> =
             std::collections::HashMap::new();
@@ -165,47 +186,47 @@ impl NotificationService for NotificationServiceImpl {
 
         let notifications: Vec<NotificationItem> = truncated
             .iter()
-            .map(|(id, notif_type, actor_id, target_id, message, is_read, created_at)| {
-                let actor = actor_id.map(|aid| {
-                    actor_map
-                        .get(&aid)
-                        .map(|(username, display_name)| {
-                            build_user_summary(
-                                &UserId::from_uuid(aid),
-                                username.clone(),
-                                display_name.clone(),
-                                String::new(),
-                                false,
-                            )
-                        })
-                        .unwrap_or_else(|| {
-                            build_user_summary(
-                                &UserId::from_uuid(aid),
-                                "[deleted]".into(),
-                                String::new(),
-                                String::new(),
-                                false,
-                            )
-                        })
-                });
+            .map(
+                |(id, notif_type, actor_id, target_id, message, is_read, created_at)| {
+                    let actor = actor_id.map(|aid| {
+                        actor_map
+                            .get(&aid)
+                            .map(|(username, display_name)| {
+                                build_user_summary(
+                                    &UserId::from_uuid(aid),
+                                    username.clone(),
+                                    display_name.clone(),
+                                    String::new(),
+                                    false,
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                build_user_summary(
+                                    &UserId::from_uuid(aid),
+                                    "[deleted]".into(),
+                                    String::new(),
+                                    String::new(),
+                                    false,
+                                )
+                            })
+                    });
 
-                let target_id_str = target_id
-                    .map(|u| u.to_string())
-                    .unwrap_or_default();
+                    let target_id_str = target_id.map(|u| u.to_string()).unwrap_or_default();
 
-                NotificationItem {
-                    notification_id: id.to_string(),
-                    notification_type: Self::db_type_to_proto(notif_type),
-                    actor,
-                    target_id: target_id_str,
-                    message: message.clone(),
-                    is_read: *is_read,
-                    created_at: Some(prost_types::Timestamp {
-                        seconds: created_at.timestamp(),
-                        nanos: created_at.timestamp_subsec_nanos() as i32,
-                    }),
-                }
-            })
+                    NotificationItem {
+                        notification_id: id.to_string(),
+                        notification_type: Self::db_type_to_proto(notif_type),
+                        actor,
+                        target_id: target_id_str,
+                        message: message.clone(),
+                        is_read: *is_read,
+                        created_at: Some(prost_types::Timestamp {
+                            seconds: created_at.timestamp(),
+                            nanos: created_at.timestamp_subsec_nanos() as i32,
+                        }),
+                    }
+                },
+            )
             .collect();
 
         let next_cursor = if has_more && rows.len() > pagination.limit as usize {
@@ -236,6 +257,13 @@ impl NotificationService for NotificationServiceImpl {
         request: Request<MarkReadRequest>,
     ) -> Result<Response<MarkReadResponse>, Status> {
         let auth = self.auth(request.metadata())?;
+        if let Err(error) = self
+            .push
+            .sync_token_from_metadata(&auth, request.metadata())
+            .await
+        {
+            tracing::warn!(error = %error, "failed syncing push token metadata");
+        }
         let req = request.into_inner();
 
         if req.notification_ids.is_empty() {
@@ -273,6 +301,13 @@ impl NotificationService for NotificationServiceImpl {
         request: Request<GetUnreadCountRequest>,
     ) -> Result<Response<GetUnreadCountResponse>, Status> {
         let auth = self.auth(request.metadata())?;
+        if let Err(error) = self
+            .push
+            .sync_token_from_metadata(&auth, request.metadata())
+            .await
+        {
+            tracing::warn!(error = %error, "failed syncing push token metadata");
+        }
 
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM notifications WHERE recipient_id = $1 AND NOT is_read",

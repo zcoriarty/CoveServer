@@ -86,8 +86,8 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             url: String::new(),
-            max_connections: 20,
-            min_connections: 5,
+            max_connections: 5,
+            min_connections: 0,
         }
     }
 }
@@ -183,8 +183,8 @@ impl CoveConfig {
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", default_port)?
             .set_default("database.url", default_database_url)?
-            .set_default("database.max_connections", 20i64)?
-            .set_default("database.min_connections", 5i64)?
+            .set_default("database.max_connections", 5i64)?
+            .set_default("database.min_connections", 0i64)?
             .set_default("redis.url", default_redis_url)?
             .set_default("storage.endpoint", default_storage_endpoint)?
             .set_default("storage.bucket", default_storage_bucket)?
@@ -232,6 +232,18 @@ impl CoveConfig {
         if self.database.url.contains("[YOUR-PASSWORD]") {
             return Err(config::ConfigError::Message(
                 "database.url still contains [YOUR-PASSWORD]; provide DATABASE_URL with the real password".to_string(),
+            ));
+        }
+
+        if self.database.max_connections == 0 {
+            return Err(config::ConfigError::Message(
+                "database.max_connections must be >= 1".to_string(),
+            ));
+        }
+
+        if self.database.min_connections > self.database.max_connections {
+            return Err(config::ConfigError::Message(
+                "database.min_connections must be <= database.max_connections".to_string(),
             ));
         }
 

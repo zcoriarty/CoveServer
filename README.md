@@ -104,6 +104,12 @@ All settings can be configured via:
 
 Environment variables take precedence over the config file.
 
+For Supabase pooler deployments, tune SQLx pool size explicitly to avoid
+`MaxClientsInSessionMode` startup failures:
+
+- `COVE_DATABASE__MAX_CONNECTIONS=5`
+- `COVE_DATABASE__MIN_CONNECTIONS=0`
+
 ## Development
 
 Requires:

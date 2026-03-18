@@ -10,7 +10,6 @@ use std::path::PathBuf;
 pub struct CoveConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
-    pub redis: RedisConfig,
     pub storage: StorageConfig,
     pub auth: AuthConfig,
     pub crypto: CryptoConfig,
@@ -29,11 +28,6 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
     pub min_connections: u32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RedisConfig {
-    pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,14 +82,6 @@ impl Default for DatabaseConfig {
             url: String::new(),
             max_connections: 5,
             min_connections: 0,
-        }
-    }
-}
-
-impl Default for RedisConfig {
-    fn default() -> Self {
-        Self {
-            url: "redis://localhost:6379".to_string(),
         }
     }
 }
@@ -166,9 +152,6 @@ impl CoveConfig {
             .unwrap_or(50051);
 
         let default_database_url = first_non_empty_env(&["DATABASE_URL"]).unwrap_or_default();
-        let default_redis_url =
-            first_non_empty_env(&["REDIS_URL", "COVE_REDIS__URL", "COVE_REDIS_URL"])
-                .unwrap_or_else(|| "redis://localhost:6379".to_string());
         let default_jwt_secret = first_non_empty_env(&["JWT_SECRET"])
             .unwrap_or_else(|| "change-me-in-production".to_string());
 
@@ -185,7 +168,6 @@ impl CoveConfig {
             .set_default("database.url", default_database_url)?
             .set_default("database.max_connections", 5i64)?
             .set_default("database.min_connections", 0i64)?
-            .set_default("redis.url", default_redis_url)?
             .set_default("storage.endpoint", default_storage_endpoint)?
             .set_default("storage.bucket", default_storage_bucket)?
             .set_default("storage.api_key", default_storage_api_key)?

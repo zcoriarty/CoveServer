@@ -28,11 +28,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("failed to connect to PostgreSQL");
 
-    let redis_client = redis::Client::open(config.redis.url.as_str()).expect("invalid redis url");
-    let redis_conn = redis::aio::ConnectionManager::new(redis_client)
-        .await
-        .expect("failed to connect to Redis");
-
     let storage = SupabaseStorageService::new(
         config.storage.endpoint.clone(),
         config.storage.bucket.clone(),
@@ -58,7 +53,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let worker = Worker {
         pool,
-        redis_conn,
         storage,
     };
 
@@ -70,7 +64,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 struct Worker {
     pool: sqlx::PgPool,
-    redis_conn: redis::aio::ConnectionManager,
     storage: SupabaseStorageService,
 }
 
@@ -119,9 +112,7 @@ impl Worker {
             tracing::info!(job_id = %job_id, job_type = %job_type, "processing job");
 
             let result = match job_type.as_str() {
-                "feed_fanout" => {
-                    handlers::handle_feed_fanout(&self.pool, &self.redis_conn, &payload).await
-                }
+                "feed_fanout" => handlers::handle_feed_fanout(&self.pool, &payload).await,
                 "media_processing" => {
                     handlers::handle_media_processing(&self.pool, &self.storage, &payload).await
                 }

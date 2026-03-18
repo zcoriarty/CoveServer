@@ -10,20 +10,18 @@ use cove_proto::cove::post::{
     PostDetail,
 };
 use prost_types::Timestamp;
-use redis::AsyncCommands;
 use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
 
 /// Post service implementation.
 pub struct PostServiceImpl {
     pub pool: PgPool,
-    pub redis: redis::aio::ConnectionManager,
     pub jwt_secret: String,
 }
 
 impl PostServiceImpl {
-    pub fn new(pool: PgPool, redis: redis::aio::ConnectionManager, jwt_secret: String) -> Self {
-        Self { pool, redis, jwt_secret }
+    pub fn new(pool: PgPool, jwt_secret: String) -> Self {
+        Self { pool, jwt_secret }
     }
 
     fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
@@ -280,10 +278,6 @@ impl PostService for PostServiceImpl {
         tx.commit()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-
-        let cache_key = format!("feed:home:{}", auth.user_id);
-        let mut conn = self.redis.clone();
-        let _: Result<(), _> = conn.del::<_, ()>(&cache_key).await;
 
         Ok(Response::new(CreatePostResponse {
             post_id: post_id.to_string(),

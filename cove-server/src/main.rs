@@ -68,15 +68,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("database migrations applied");
 
-    // --- Redis ---
-    let redis_client =
-        redis::Client::open(config.redis.url.as_str()).expect("failed to create Redis client");
-    let redis_conn = redis::aio::ConnectionManager::new(redis_client)
-        .await
-        .expect("failed to connect to Redis");
-
-    tracing::info!("connected to Redis");
-
     // --- Supabase Storage ---
     let storage = cove_server::storage::object_store::SupabaseStorageService::new(
         config.storage.endpoint.clone(),
@@ -137,8 +128,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user_svc = UserServiceImpl::new(pool.clone(), jwt_secret.clone(), password_hasher.clone());
     let profile_svc = ProfileServiceImpl::new(pool.clone(), jwt_secret.clone());
     let follow_svc = FollowServiceImpl::new(pool.clone(), jwt_secret.clone(), push_service.clone());
-    let post_svc = PostServiceImpl::new(pool.clone(), redis_conn.clone(), jwt_secret.clone());
-    let feed_svc = FeedServiceImpl::new(pool.clone(), redis_conn.clone(), jwt_secret.clone());
+    let post_svc = PostServiceImpl::new(pool.clone(), jwt_secret.clone());
+    let feed_svc = FeedServiceImpl::new(pool.clone(), jwt_secret.clone());
     let comment_svc = CommentServiceImpl::new(pool.clone(), jwt_secret.clone());
     let like_svc = LikeServiceImpl::new(pool.clone(), jwt_secret.clone());
     let share_svc = ShareServiceImpl::new(pool.clone(), jwt_secret.clone());
@@ -149,7 +140,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin_svc = AdminServiceImpl::new(
         pool.clone(),
         jwt_secret.clone(),
-        redis_conn.clone(),
         storage.clone(),
     );
 

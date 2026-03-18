@@ -27,9 +27,6 @@ prost-types = "0.13"
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
 
-# Redis
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-
 # Cryptography
 argon2 = "0.5"
 aes-gcm = "0.10"

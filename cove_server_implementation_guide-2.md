@@ -110,9 +110,9 @@ CoveServer should be built as a **modular monolith** in Rust for v1, with a few 
    - Should be encrypted at rest
    - Prefer S3-compatible self-hosted storage rather than storing blobs in PostgreSQL
 
-4. **Redis**
-   - Used for caching, short-lived state, and queue coordination where appropriate
-   - Useful for feed caches, session-related ephemeral state, rate-limit tracking, and notification fanout support
+4. **In-memory cache layer (optional)**
+   - Used for caching and short-lived state where appropriate
+   - Useful for feed caches, session-related ephemeral state, and rate-limit tracking
 
 5. **Background worker service (Rust)**
    - Handles asynchronous jobs such as image validation, thumbnail generation, video transcoding, EXIF stripping, search indexing updates, notification fanout, and feed updates
@@ -133,10 +133,10 @@ Recommended containers:
 - **CoveServer API**: main Rust gRPC application
 - **Worker**: asynchronous jobs such as media processing and notification fanout
 - **PostgreSQL**: primary relational database
-- **Redis**: caching and ephemeral coordination
+- **In-memory cache layer (optional)**: caching and ephemeral coordination
 - **Object storage**: media storage if self-hosted in the same environment
 
-Only the **reverse proxy** should be exposed externally. PostgreSQL, Redis, object storage, and internal application containers should remain on a private Docker network.
+Only the **reverse proxy** should be exposed externally. PostgreSQL, object storage, and internal application containers should remain on a private Docker network.
 
 In this setup, external clients connect to the **Mac mini’s public IP or domain**, and Docker routes traffic from the exposed reverse proxy port to the correct internal service.
 
@@ -211,7 +211,7 @@ A strong internal layering model should look like this:
 - **Transport layer**: gRPC handlers, request decoding, response encoding, error mapping
 - **Application layer**: use cases and orchestration logic
 - **Domain layer**: business rules, domain entities, access control rules
-- **Infrastructure layer**: PostgreSQL, Redis, object storage, queues, metrics, filesystem, external process invocation
+- **Infrastructure layer**: PostgreSQL, object storage, queues, metrics, filesystem, external process invocation
 
 The transport layer should be thin. Business logic should not live directly inside gRPC handlers.
 
@@ -844,7 +844,7 @@ Do not overuse transactions for long-running operations involving media processi
 
 ## 18. Caching Strategy
 
-Redis should be used conservatively and intentionally.
+Caching should be used conservatively and intentionally.
 
 ### 18.1 Good cache candidates
 
@@ -916,7 +916,7 @@ Expose health and readiness signals for:
 
 - gRPC API
 - PostgreSQL connectivity
-- Redis connectivity
+- cache layer connectivity (if enabled)
 - object storage availability
 - worker liveness
 
@@ -1111,7 +1111,7 @@ A practical v1 stack for CoveServer is:
 - **Rust** for API and workers
 - **gRPC + protobuf** for transport
 - **PostgreSQL** for relational state
-- **Redis** for caching and short-lived state
+- **Optional cache layer** for caching and short-lived state
 - **S3-compatible object storage** for media
 - **Reverse proxy with TLS** for ingress
 - **Mac minis with disk encryption enabled** as the initial deployment environment
@@ -1140,7 +1140,7 @@ These should be treated as first-class design concerns from the start.
 
 ## 26. Final Recommendation
 
-CoveServer should be built as a **security-first modular monolith in Rust**, using **gRPC** for client-server communication, **PostgreSQL** as the system of record, **object storage** for encrypted media, **Redis** for carefully chosen caching needs, and **Rust background workers** for all heavy asynchronous processing.
+CoveServer should be built as a **security-first modular monolith in Rust**, using **gRPC** for client-server communication, **PostgreSQL** as the system of record, **object storage** for encrypted media, an **optional cache layer** for carefully chosen caching needs, and **Rust background workers** for all heavy asynchronous processing.
 
 The right strategy is not to chase maximum architectural sophistication. It is to build a system that is:
 
@@ -1151,4 +1151,3 @@ The right strategy is not to chase maximum architectural sophistication. It is t
 - structured cleanly enough to evolve over time
 
 That will give Cove the best chance of becoming a trustworthy, long-lived private media platform for the people it is meant to serve.
-

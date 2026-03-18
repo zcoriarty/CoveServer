@@ -10,9 +10,6 @@ url = "postgresql://postgres:replace-me@db.example.supabase.co:5432/postgres"
 max_connections = 5
 min_connections = 0
 
-[redis]
-url = "redis://127.0.0.1:6379/"
-
 [storage]
 endpoint = "https://example.supabase.co/storage/v1"
 bucket = "media"

@@ -13,7 +13,6 @@ cove-server = { path = "../cove-server" }
 
 tokio = { workspace = true }
 sqlx = { workspace = true }
-redis = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }

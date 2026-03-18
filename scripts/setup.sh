@@ -80,7 +80,6 @@ DATABASE_URL=postgresql://postgres:replace-me@db.your-project-ref.supabase.co:54
 SUPABASE_STORAGE_ENDPOINT=https://your-project-ref.storage.supabase.co/storage/v1/s3
 SUPABASE_STORAGE_BUCKET=media
 SUPABASE_SECRET_KEY=replace-me
-REDIS_URL=redis://127.0.0.1:6379/
 PORT=50051
 EOF
     info "Generated .env with random secrets"
@@ -109,10 +108,7 @@ echo -e "  ${BOLD}To start with Docker Compose (recommended):${NC}"
 echo "    docker compose up -d"
 echo ""
 echo -e "  ${BOLD}To run locally for development:${NC}"
-echo "    # Start infrastructure first:"
-echo "    docker compose up -d redis"
-echo ""
-echo "    # Then run the server and worker:"
+echo "    # Run the server and worker:"
 echo "    cargo run --bin cove-server"
 echo "    cargo run --bin cove-worker   # in another terminal"
 echo ""

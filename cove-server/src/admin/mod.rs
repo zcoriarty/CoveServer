@@ -14,7 +14,6 @@ use tonic::{Request, Response, Status};
 pub struct AdminServiceImpl {
     pool: PgPool,
     jwt_secret: String,
-    redis_conn: redis::aio::ConnectionManager,
     storage: crate::storage::object_store::SupabaseStorageService,
 }
 
@@ -22,13 +21,11 @@ impl AdminServiceImpl {
     pub fn new(
         pool: PgPool,
         jwt_secret: String,
-        redis_conn: redis::aio::ConnectionManager,
         storage: crate::storage::object_store::SupabaseStorageService,
     ) -> Self {
         Self {
             pool,
             jwt_secret,
-            redis_conn,
             storage,
         }
     }
@@ -293,14 +290,6 @@ impl AdminService for AdminServiceImpl {
 
         let db_healthy = sqlx::query("SELECT 1").fetch_one(&self.pool).await.is_ok();
 
-        let redis_healthy = {
-            let mut conn = self.redis_conn.clone();
-            redis::cmd("PING")
-                .query_async::<String>(&mut conn)
-                .await
-                .is_ok()
-        };
-
         let storage_healthy = self.storage.health_check().await.is_ok();
 
         let active_users: i64 =
@@ -323,7 +312,6 @@ impl AdminService for AdminServiceImpl {
 
         Ok(Response::new(GetSystemHealthResponse {
             database_healthy: db_healthy,
-            redis_healthy,
             storage_healthy,
             worker_healthy: true,
             active_users,

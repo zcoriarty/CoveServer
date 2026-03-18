@@ -9,29 +9,20 @@ use cove_proto::cove::feed::{
     feed_service_server::FeedService, FeedItem, GetHomeFeedRequest, GetHomeFeedResponse,
 };
 use cove_proto::cove::post::PostDetail;
-use prost::Message;
 use prost_types::Timestamp;
-use redis::AsyncCommands;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 
-const FEED_CACHE_TTL_SECS: u64 = 300;
-
 /// Feed service implementation.
 pub struct FeedServiceImpl {
     pub pool: PgPool,
-    pub redis: redis::aio::ConnectionManager,
     pub jwt_secret: String,
 }
 
 impl FeedServiceImpl {
-    pub fn new(pool: PgPool, redis: redis::aio::ConnectionManager, jwt_secret: String) -> Self {
-        Self {
-            pool,
-            redis,
-            jwt_secret,
-        }
+    pub fn new(pool: PgPool, jwt_secret: String) -> Self {
+        Self { pool, jwt_secret }
     }
 
     fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
@@ -295,10 +286,7 @@ impl FeedService for FeedServiceImpl {
             .unwrap_or("");
 
         let params = PaginationParams::from_proto(page_size, cursor_str);
-        let is_page1 = params.cursor.is_none();
-
-        // Redis read-cache disabled: always query Postgres for fresh data.
-        // TODO: re-enable once cache invalidation is verified end-to-end.
+        // Caching is disabled: always query Postgres for fresh data.
 
         let limit_plus_one = params.limit as i64 + 1;
 
@@ -393,8 +381,7 @@ impl FeedService for FeedServiceImpl {
             }),
         };
 
-        // Redis write-cache disabled while debugging.
-        // TODO: re-enable once cache invalidation is verified end-to-end.
+        // Caching is currently disabled.
 
         Ok(Response::new(response))
     }

@@ -11,7 +11,6 @@ type JobResult = Result<(), Box<dyn std::error::Error>>;
 /// Feed fanout: insert feed_entries for all followers of the post author.
 pub async fn handle_feed_fanout(
     pool: &PgPool,
-    redis_conn: &redis::aio::ConnectionManager,
     payload: &serde_json::Value,
 ) -> JobResult {
     let post_id = payload["post_id"].as_str().ok_or("missing post_id")?;
@@ -60,14 +59,6 @@ pub async fn handle_feed_fanout(
         .execute(pool)
         .await?;
     }
-
-    let mut conn = redis_conn.clone();
-    for follower_id in &follower_ids {
-        let key = format!("feed:home:{}", follower_id);
-        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn, &key).await;
-    }
-    let author_key = format!("feed:home:{}", author_uuid);
-    let _: Result<(), _> = redis::AsyncCommands::del(&mut conn, &author_key).await;
 
     for follower_id in &follower_ids {
         let notif_payload = serde_json::json!({

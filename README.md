@@ -9,7 +9,6 @@ CoveServer is a **modular monolith** with clearly separated domain modules, back
 - **Rust** — API server and background workers
 - **gRPC + Protobuf** — client-server communication (13 service definitions)
 - **Supabase PostgreSQL** — relational data (users, posts, follows, comments, likes, notifications, feed)
-- **Redis** — feed caching, rate limiting, ephemeral state
 - **Supabase Storage** — media object storage
 - **Railway + Docker** — container deployment
 
@@ -28,7 +27,7 @@ CoveServer/
 │       ├── social_graph/# Follow/unfollow, pending requests, follower lists
 │       ├── posts/       # Post creation, retrieval, deletion, caption editing
 │       ├── media/       # Upload initiation, completion, presigned access URLs
-│       ├── feed/        # Chronological home feed with Redis caching
+│       ├── feed/        # Chronological home feed with cursor pagination
 │       ├── comments/    # Threaded comments with authorization
 │       ├── likes/       # Like/unlike with count management
 │       ├── sharing/     # In-app post sharing between users
@@ -37,7 +36,7 @@ CoveServer/
 │       ├── admin/       # Invite management, user moderation, system health
 │       ├── audit/       # Audit logging for privileged actions
 │       ├── crypto/      # Argon2id passwords, JWT tokens, AES-256-GCM encryption
-│       ├── storage/     # Redis cache service, S3 object store helpers
+│       ├── storage/     # Supabase object store helpers
 │       ├── jobs/        # Job queue interface (enqueue for background processing)
 │       └── config/      # Configuration from env vars (COVE_ prefix) or TOML
 ├── cove-worker/         # Background worker binary
@@ -46,7 +45,7 @@ CoveServer/
 │       └── handlers.rs  # Feed fanout, media processing, notifications
 ├── migrations/          # PostgreSQL schema (single migration for v1)
 ├── config/              # Default configuration (cove.toml)
-├── docker-compose.yml   # Local server/worker + Redis stack
+├── docker-compose.yml   # Local server/worker stack
 └── Dockerfile           # Multi-stage Rust build
 ```
 
@@ -78,7 +77,6 @@ CoveServer/
 - **EXIF stripping** during media processing
 - **Presigned URLs** for time-limited media access
 - **Audit logging** for all privileged admin actions
-- **Rate limiting** via Redis
 - **Private-by-default** accounts and posts
 
 ## Quick Start
@@ -86,9 +84,9 @@ CoveServer/
 ```bash
 # 1. Copy and configure environment
 cp .env.example .env
-# Edit .env with Supabase + Redis values
+# Edit .env with Supabase values
 
-# 2. Start server + worker + Redis locally
+# 2. Start server + worker locally
 docker compose up -d
 
 # 3. The gRPC API is available on port 50051
@@ -99,7 +97,7 @@ docker compose up -d
 
 All settings can be configured via:
 - **Environment variables** with `COVE_` prefix (e.g., `COVE_DATABASE__URL`)
-- **Railway/Supabase standard envs** (`PORT`, `DATABASE_URL`, `SUPABASE_STORAGE_*`, `SUPABASE_SECRET_KEY`, `REDIS_URL`, `JWT_SECRET`)
+- **Railway/Supabase standard envs** (`PORT`, `DATABASE_URL`, `SUPABASE_STORAGE_*`, `SUPABASE_SECRET_KEY`, `JWT_SECRET`)
 - **TOML config file** at `config/cove.toml`
 
 Environment variables take precedence over the config file.
@@ -115,7 +113,6 @@ For Supabase pooler deployments, tune SQLx pool size explicitly to avoid
 Requires:
 - Rust 1.82+
 - `protoc` (Protocol Buffers compiler)
-- Redis 7+
 - Supabase project (Postgres + Storage)
 
 ```bash
@@ -142,7 +139,6 @@ Required environment variables for both services:
 - `SUPABASE_STORAGE_ENDPOINT`
 - `SUPABASE_STORAGE_BUCKET`
 - `SUPABASE_SECRET_KEY`
-- `REDIS_URL`
 - `JWT_SECRET`
 
 Notes:

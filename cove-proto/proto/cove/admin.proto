@@ -63,7 +63,7 @@ message GetSystemHealthRequest {}
 
 message GetSystemHealthResponse {
   bool database_healthy = 1;
-  bool redis_healthy = 2;
+  reserved 2;
   bool storage_healthy = 3;
   bool worker_healthy = 4;
   int64 active_users = 5;

@@ -9,13 +9,9 @@ services:
     environment:
       COVE_SERVER__HOST: "0.0.0.0"
       COVE_SERVER__PORT: "50051"
-      REDIS_URL: "redis://redis:6379/"
     ports:
       - "0.0.0.0:50051:50051"
       - "0.0.0.0:9090:9090"
-    depends_on:
-      redis:
-        condition: service_healthy
     restart: unless-stopped
 
   cove-worker:
@@ -25,24 +21,4 @@ services:
     command: ["cove-worker"]
     env_file:
       - .env
-    environment:
-      REDIS_URL: "redis://redis:6379/"
-    depends_on:
-      redis:
-        condition: service_healthy
     restart: unless-stopped
-
-  redis:
-    image: redis:7-bookworm
-    command: ["redis-server"]
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
-volumes:
-  redis-data:

@@ -158,16 +158,16 @@ impl SupabaseStorageService {
             .await
             .map_err(|e| CoveError::Unavailable(format!("bucket lookup failed: {}", e)))?;
 
-        if lookup.status().is_success() {
+        let lookup_status = lookup.status();
+        if lookup_status.is_success() {
             return Ok(());
         }
 
-        if lookup.status() != StatusCode::NOT_FOUND {
-            let status = lookup.status();
-            let body = lookup.text().await.unwrap_or_default();
+        let lookup_body = lookup.text().await.unwrap_or_default();
+        if !is_bucket_missing_response(lookup_status, &lookup_body) {
             return Err(CoveError::Unavailable(format!(
                 "bucket lookup failed: status={} body={}",
-                status, body
+                lookup_status, lookup_body
             )));
         }
 
@@ -209,6 +209,22 @@ impl SupabaseStorageService {
     }
 }
 
+fn is_bucket_missing_response(status: StatusCode, body: &str) -> bool {
+    if status == StatusCode::NOT_FOUND {
+        return true;
+    }
+
+    if status != StatusCode::BAD_REQUEST {
+        return false;
+    }
+
+    let lower = body.to_ascii_lowercase();
+    lower.contains("bucket not found")
+        || lower.contains("\"statuscode\":\"404\"")
+        || lower.contains("\"statuscode\":404")
+        || lower.contains("\"code\":\"not_found\"")
+}
+
 fn normalize_endpoint(endpoint: String) -> CoveResult<String> {
     let endpoint = endpoint.trim().trim_end_matches('/').to_string();
     if endpoint.is_empty() {
@@ -236,7 +252,8 @@ fn normalize_endpoint(endpoint: String) -> CoveResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_endpoint;
+    use super::{is_bucket_missing_response, normalize_endpoint};
+    use reqwest::StatusCode;
 
     #[test]
     fn normalizes_supabase_s3_endpoint() {
@@ -265,6 +282,18 @@ mod tests {
         assert!(err
             .to_string()
             .contains("SUPABASE_STORAGE_ENDPOINT must end with /storage/v1"));
+    }
+
+    #[test]
+    fn treats_supabase_bucket_not_found_400_as_missing() {
+        let body = r#"{"statusCode":"404","error":"Bucket not found","message":"Bucket not found"}"#;
+        assert!(is_bucket_missing_response(StatusCode::BAD_REQUEST, body));
+    }
+
+    #[test]
+    fn does_not_treat_generic_400_as_missing_bucket() {
+        let body = r#"{"statusCode":"400","error":"Bad request","message":"Invalid request"}"#;
+        assert!(!is_bucket_missing_response(StatusCode::BAD_REQUEST, body));
     }
 
 }

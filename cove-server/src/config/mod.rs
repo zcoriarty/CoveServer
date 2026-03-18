@@ -38,7 +38,9 @@ pub struct RedisConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
-    pub data_path: String,
+    pub endpoint: String,
+    pub bucket: String,
+    pub api_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,7 +85,7 @@ impl Default for ServerConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: "postgres://localhost/cove".to_string(),
+            url: String::new(),
             max_connections: 20,
             min_connections: 5,
         }
@@ -101,7 +103,9 @@ impl Default for RedisConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            data_path: "./data/media".to_string(),
+            endpoint: String::new(),
+            bucket: String::new(),
+            api_key: String::new(),
         }
     }
 }
@@ -154,24 +158,40 @@ impl Default for PushConfig {
 
 impl CoveConfig {
     /// Load configuration from environment variables (COVE_ prefix) with optional
-    /// config file. Environment overrides file. Uses sensible defaults for missing values.
+    /// config file. Environment overrides file.
     pub fn load() -> Result<Self, config::ConfigError> {
-        let default_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://localhost/cove".to_string());
-        let default_redis =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+        let default_port = std::env::var("PORT")
+            .ok()
+            .and_then(|p| p.parse::<i64>().ok())
+            .unwrap_or(50051);
+
+        let default_database_url = resolve_database_url().unwrap_or_default();
+        let default_redis_url =
+            first_non_empty_env(&["REDIS_URL", "COVE_REDIS__URL", "COVE_REDIS_URL"])
+                .unwrap_or_else(|| "redis://localhost:6379".to_string());
+        let default_jwt_secret = first_non_empty_env(&["JWT_SECRET"])
+            .unwrap_or_else(|| "change-me-in-production".to_string());
+
+        let default_storage_endpoint =
+            first_non_empty_env(&["SUPABASE_STORAGE_ENDPOINT"]).unwrap_or_default();
+        let default_storage_bucket =
+            first_non_empty_env(&["SUPABASE_STORAGE_BUCKET"]).unwrap_or_default();
+        let default_storage_api_key =
+            first_non_empty_env(&["SUPABASE_SECRET_KEY"]).unwrap_or_default();
 
         let cfg = config::Config::builder()
             .set_default("server.host", "0.0.0.0")?
-            .set_default("server.port", 50051i64)?
-            .set_default("database.url", default_url)?
+            .set_default("server.port", default_port)?
+            .set_default("database.url", default_database_url)?
             .set_default("database.max_connections", 20i64)?
             .set_default("database.min_connections", 5i64)?
-            .set_default("redis.url", default_redis)?
-            .set_default("storage.data_path", "./data/media")?
+            .set_default("redis.url", default_redis_url)?
+            .set_default("storage.endpoint", default_storage_endpoint)?
+            .set_default("storage.bucket", default_storage_bucket)?
+            .set_default("storage.api_key", default_storage_api_key)?
             .set_default("auth.access_token_ttl_secs", 900i64)?
             .set_default("auth.refresh_token_ttl_secs", 604_800i64)?
-            .set_default("auth.jwt_secret", "change-me-in-production")?
+            .set_default("auth.jwt_secret", default_jwt_secret)?
             .set_default("crypto.master_key_path", "/run/cove/master.key")?
             .set_default("media.max_upload_bytes", 52_428_800i64)? // 50 MiB
             .set_default("media.max_video_duration_secs", 60i64)?
@@ -189,7 +209,7 @@ impl CoveConfig {
             .set_default("push.apns_bundle_id", "")?
             .set_default("push.apns_private_key_path", "./secrets/AuthKey.p8")?
             .set_default("push.default_environment", "development")?
-            .add_source(config::File::with_name("config").required(false))
+            .add_source(config::File::with_name("config/cove").required(false))
             .add_source(
                 config::Environment::with_prefix("COVE")
                     .separator("__")
@@ -197,6 +217,63 @@ impl CoveConfig {
             )
             .build()?;
 
-        cfg.try_deserialize()
+        let parsed: Self = cfg.try_deserialize()?;
+        parsed.validate()?;
+        Ok(parsed)
     }
+
+    fn validate(&self) -> Result<(), config::ConfigError> {
+        if self.database.url.trim().is_empty() {
+            return Err(config::ConfigError::Message(
+                "database.url is required (set DATABASE_URL or SUPABASE_URL)".to_string(),
+            ));
+        }
+
+        if self.database.url.contains("[YOUR-PASSWORD]") {
+            return Err(config::ConfigError::Message(
+                "database.url still contains [YOUR-PASSWORD]; set SUPABASE_PASSWORD or provide DATABASE_URL with the real password".to_string(),
+            ));
+        }
+
+        if self.storage.endpoint.trim().is_empty() {
+            return Err(config::ConfigError::Message(
+                "storage.endpoint is required (set SUPABASE_STORAGE_ENDPOINT)".to_string(),
+            ));
+        }
+
+        if self.storage.bucket.trim().is_empty() {
+            return Err(config::ConfigError::Message(
+                "storage.bucket is required (set SUPABASE_STORAGE_BUCKET)".to_string(),
+            ));
+        }
+
+        if self.storage.api_key.trim().is_empty() {
+            return Err(config::ConfigError::Message(
+                "storage.api_key is required (set SUPABASE_SECRET_KEY)".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+fn first_non_empty_env(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| match std::env::var(key) {
+        Ok(value) if !value.trim().is_empty() => Some(value),
+        _ => None,
+    })
+}
+
+fn resolve_database_url() -> Option<String> {
+    if let Some(url) =
+        first_non_empty_env(&["DATABASE_URL", "COVE_DATABASE__URL", "COVE_DATABASE_URL"])
+    {
+        return Some(url);
+    }
+
+    let mut supabase_url = first_non_empty_env(&["SUPABASE_URL"])?;
+    if let Some(password) = first_non_empty_env(&["SUPABASE_PASSWORD"]) {
+        supabase_url = supabase_url.replace("[YOUR-PASSWORD]", &password);
+    }
+    Some(supabase_url)
 }

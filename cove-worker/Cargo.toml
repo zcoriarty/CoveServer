@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 cove-common = { path = "../cove-common" }
+cove-server = { path = "../cove-server" }
 
 tokio = { workspace = true }
 sqlx = { workspace = true }

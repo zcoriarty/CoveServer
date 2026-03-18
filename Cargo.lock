@@ -676,6 +676,7 @@ dependencies = [
  "chrono",
  "config",
  "cove-common",
+ "cove-server",
  "image",
  "kamadak-exif",
  "rand 0.8.5",

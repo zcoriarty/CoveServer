@@ -167,13 +167,13 @@ All APIs are **gRPC** over HTTP/2. Package: `cove.*`.
 
 | Env Var | Purpose |
 |---------|---------|
-| `DATABASE_URL` / `COVE_DATABASE__URL` | PostgreSQL connection string |
-| `COVE_AUTH__JWT_SECRET` | JWT signing secret |
-| `COVE_CRYPTO__MASTER_KEY_PATH` | Encryption key for media |
-| `COVE_SERVER__HOST` / `COVE_SERVER__PORT` | Server bind address |
-| `REDIS_*` | Redis for caching/jobs |
+| `DATABASE_URL` or `SUPABASE_URL` | PostgreSQL connection string |
+| `SUPABASE_STORAGE_ENDPOINT` / `SUPABASE_STORAGE_BUCKET` / `SUPABASE_SECRET_KEY` | Supabase Storage access |
+| `JWT_SECRET` or `COVE_AUTH__JWT_SECRET` | JWT signing secret |
+| `PORT` / `COVE_SERVER__PORT` | Server bind address |
+| `REDIS_URL` | Redis for caching/jobs |
 
-iOS app typically connects to server via HTTPS (often behind Traefik) on port 443.
+iOS app connects to the Railway public domain over HTTPS (HTTP/2).
 
 ---
 

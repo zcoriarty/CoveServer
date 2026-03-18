@@ -61,6 +61,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("connected to PostgreSQL");
 
+    sqlx::migrate!("../migrations")
+        .run(&pool)
+        .await
+        .expect("failed to run database migrations");
+
+    tracing::info!("database migrations applied");
+
     // --- Redis ---
     let redis_client =
         redis::Client::open(config.redis.url.as_str()).expect("failed to create Redis client");
@@ -70,15 +77,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("connected to Redis");
 
-    // --- Local Storage ---
-    let storage =
-        cove_server::storage::object_store::LocalStorageService::new(&config.storage.data_path);
-    storage
-        .init()
-        .await
-        .expect("failed to initialize storage directory");
+    // --- Supabase Storage ---
+    let storage = cove_server::storage::object_store::SupabaseStorageService::new(
+        config.storage.endpoint.clone(),
+        config.storage.bucket.clone(),
+        config.storage.api_key.clone(),
+    )
+    .expect("failed to configure Supabase storage");
 
-    tracing::info!(path = %config.storage.data_path, "local storage initialized");
+    storage
+        .ensure_bucket_exists()
+        .await
+        .expect("failed to ensure Supabase storage bucket exists");
+
+    storage
+        .health_check()
+        .await
+        .expect("failed to connect to Supabase storage");
+
+    tracing::info!(
+        endpoint = %storage.endpoint(),
+        bucket = %storage.bucket(),
+        "supabase storage initialized"
+    );
 
     // --- Crypto Services ---
     let password_hasher = Arc::new(PasswordHasher::new());

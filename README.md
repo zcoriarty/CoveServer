@@ -1,6 +1,6 @@
 # CoveServer
 
-A private, Instagram-style media-sharing server built in Rust with gRPC. Designed for self-hosted deployment on infrastructure like Mac minis, serving a known group of friends and family with security and privacy as top priorities.
+A private, Instagram-style media-sharing server built in Rust with gRPC. Deployment target is Railway, with Supabase for PostgreSQL and object storage.
 
 ## Architecture
 
@@ -8,10 +8,10 @@ CoveServer is a **modular monolith** with clearly separated domain modules, back
 
 - **Rust** — API server and background workers
 - **gRPC + Protobuf** — client-server communication (13 service definitions)
-- **PostgreSQL** — relational data (users, posts, follows, comments, likes, notifications, feed)
+- **Supabase PostgreSQL** — relational data (users, posts, follows, comments, likes, notifications, feed)
 - **Redis** — feed caching, rate limiting, ephemeral state
-- **S3-compatible object storage** (MinIO) — encrypted media storage
-- **Docker Compose** — single-host deployment with Traefik for TLS termination
+- **Supabase Storage** — media object storage
+- **Railway + Docker** — container deployment
 
 ## Project Structure
 
@@ -46,7 +46,7 @@ CoveServer/
 │       └── handlers.rs  # Feed fanout, media processing, notifications
 ├── migrations/          # PostgreSQL schema (single migration for v1)
 ├── config/              # Default configuration (cove.toml)
-├── docker-compose.yml   # Full deployment stack
+├── docker-compose.yml   # Local server/worker + Redis stack
 └── Dockerfile           # Multi-stage Rust build
 ```
 
@@ -84,26 +84,23 @@ CoveServer/
 ## Quick Start
 
 ```bash
-# 1. Create secrets directory with a master encryption key
-mkdir -p secrets
-openssl rand 32 > secrets/master.key
-
-# 2. Copy and configure environment
+# 1. Copy and configure environment
 cp .env.example .env
-# Edit .env with production-strength secrets
+# Edit .env with Supabase + Redis values
 
-# 3. Start everything
+# 2. Start server + worker + Redis locally
 docker compose up -d
 
-# 4. The gRPC API is available on port 443 (TLS via Traefik)
+# 3. The gRPC API is available on port 50051
 #    Prometheus metrics on port 9090
 ```
 
 ## Configuration
 
 All settings can be configured via:
-- **Environment variables** with `COVE_` prefix (e.g., `COVE_DATABASE_URL`)
-- **TOML config file** at `config/cove.toml` or path in `COVE_CONFIG`
+- **Environment variables** with `COVE_` prefix (e.g., `COVE_DATABASE__URL`)
+- **Railway/Supabase standard envs** (`PORT`, `DATABASE_URL`, `SUPABASE_*`, `REDIS_URL`, `JWT_SECRET`)
+- **TOML config file** at `config/cove.toml`
 
 Environment variables take precedence over the config file.
 
@@ -112,9 +109,8 @@ Environment variables take precedence over the config file.
 Requires:
 - Rust 1.82+
 - `protoc` (Protocol Buffers compiler)
-- PostgreSQL 16+
 - Redis 7+
-- S3-compatible storage (MinIO)
+- Supabase project (Postgres + Storage)
 
 ```bash
 # Build
@@ -126,6 +122,28 @@ cargo run --bin cove-server
 # Run the worker
 cargo run --bin cove-worker
 ```
+
+## Railway Deployment
+
+Deploy as two Railway services from this repo:
+
+1. `cove-server` service with start command `cove-server`
+2. `cove-worker` service with start command `cove-worker`
+
+Required environment variables for both services:
+
+- `SUPABASE_URL` (or `DATABASE_URL`)
+- `SUPABASE_PASSWORD` (if `SUPABASE_URL` contains `[YOUR-PASSWORD]`)
+- `SUPABASE_STORAGE_ENDPOINT`
+- `SUPABASE_STORAGE_BUCKET`
+- `SUPABASE_SECRET_KEY`
+- `REDIS_URL`
+- `JWT_SECRET`
+
+Notes:
+- Railway sets `PORT`; the server now binds to that automatically.
+- The server runs SQL migrations on startup.
+- The Supabase storage bucket is auto-created on startup if missing.
 
 ## License
 

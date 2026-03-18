@@ -19,7 +19,7 @@ COPY --from=builder /build/target/release/cove-server /usr/local/bin/cove-server
 COPY --from=builder /build/target/release/cove-worker /usr/local/bin/cove-worker
 COPY migrations /opt/cove/migrations
 
-RUN mkdir -p /opt/cove/data/media && chown -R cove:cove /opt/cove
+RUN mkdir -p /opt/cove && chown -R cove:cove /opt/cove
 
 USER cove
 WORKDIR /opt/cove

@@ -2,8 +2,9 @@
 //! Polls the jobs table and processes async tasks: feed fanout, media processing,
 //! notification delivery, EXIF stripping, thumbnail generation, and search indexing.
 
+use cove_server::config::CoveConfig;
+use cove_server::storage::object_store::SupabaseStorageService;
 use sqlx::{postgres::PgPoolOptions, Row};
-use std::path::PathBuf;
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -18,36 +19,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("starting CoveServer worker");
 
-    let db_url =
-        std::env::var("COVE_DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/cove".into());
-    let redis_url =
-        std::env::var("COVE_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
-    let storage_path =
-        std::env::var("COVE_STORAGE_DATA_PATH").unwrap_or_else(|_| "./data/media".into());
+    let config = CoveConfig::load().expect("failed to load configuration");
 
     let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .min_connections(2)
-        .connect(&db_url)
+        .max_connections(config.database.max_connections)
+        .min_connections(config.database.min_connections)
+        .connect(&config.database.url)
         .await
         .expect("failed to connect to PostgreSQL");
 
-    let redis_client = redis::Client::open(redis_url.as_str()).expect("invalid redis url");
+    let redis_client = redis::Client::open(config.redis.url.as_str()).expect("invalid redis url");
     let redis_conn = redis::aio::ConnectionManager::new(redis_client)
         .await
         .expect("failed to connect to Redis");
 
-    let storage_base = PathBuf::from(&storage_path);
-    tokio::fs::create_dir_all(&storage_base)
-        .await
-        .expect("failed to create storage directory");
+    let storage = SupabaseStorageService::new(
+        config.storage.endpoint.clone(),
+        config.storage.bucket.clone(),
+        config.storage.api_key.clone(),
+    )
+    .expect("failed to configure Supabase storage");
 
-    tracing::info!(path = %storage_path, "local storage initialized");
+    storage
+        .ensure_bucket_exists()
+        .await
+        .expect("failed to ensure Supabase storage bucket exists");
+
+    storage
+        .health_check()
+        .await
+        .expect("failed to connect to Supabase storage");
+
+    tracing::info!(
+        endpoint = %storage.endpoint(),
+        bucket = %storage.bucket(),
+        "supabase storage initialized"
+    );
 
     let worker = Worker {
         pool,
         redis_conn,
-        storage_base,
+        storage,
     };
 
     tracing::info!("worker polling started");
@@ -59,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Worker {
     pool: sqlx::PgPool,
     redis_conn: redis::aio::ConnectionManager,
-    storage_base: PathBuf,
+    storage: SupabaseStorageService,
 }
 
 impl Worker {
@@ -107,9 +119,11 @@ impl Worker {
             tracing::info!(job_id = %job_id, job_type = %job_type, "processing job");
 
             let result = match job_type.as_str() {
-                "feed_fanout" => handlers::handle_feed_fanout(&self.pool, &self.redis_conn, &payload).await,
+                "feed_fanout" => {
+                    handlers::handle_feed_fanout(&self.pool, &self.redis_conn, &payload).await
+                }
                 "media_processing" => {
-                    handlers::handle_media_processing(&self.pool, &self.storage_base, &payload).await
+                    handlers::handle_media_processing(&self.pool, &self.storage, &payload).await
                 }
                 "notification" => handlers::handle_notification(&self.pool, &payload).await,
                 other => {
@@ -131,21 +145,19 @@ impl Worker {
                 Err(e) => {
                     tracing::error!(job_id = %job_id, error = %e, "job failed");
 
-                    let max_attempts: i32 = sqlx::query_scalar(
-                        "SELECT max_attempts FROM jobs WHERE id = $1",
-                    )
-                    .bind(job_id)
-                    .fetch_one(&self.pool)
-                    .await
-                    .unwrap_or(3);
+                    let max_attempts: i32 =
+                        sqlx::query_scalar("SELECT max_attempts FROM jobs WHERE id = $1")
+                            .bind(job_id)
+                            .fetch_one(&self.pool)
+                            .await
+                            .unwrap_or(3);
 
-                    let attempts: i32 = sqlx::query_scalar(
-                        "SELECT attempts FROM jobs WHERE id = $1",
-                    )
-                    .bind(job_id)
-                    .fetch_one(&self.pool)
-                    .await
-                    .unwrap_or(1);
+                    let attempts: i32 =
+                        sqlx::query_scalar("SELECT attempts FROM jobs WHERE id = $1")
+                            .bind(job_id)
+                            .fetch_one(&self.pool)
+                            .await
+                            .unwrap_or(1);
 
                     let new_state = if attempts >= max_attempts {
                         "dead"

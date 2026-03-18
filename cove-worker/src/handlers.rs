@@ -1,9 +1,9 @@
 //! Job handler implementations for the background worker.
 
+use cove_server::storage::object_store::SupabaseStorageService;
 use exif::{In, Reader as ExifReader, Tag};
-use image::{DynamicImage, ImageReader, codecs::jpeg::JpegEncoder};
+use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageReader};
 use sqlx::{PgPool, Row};
-use std::path::Path;
 use uuid::Uuid;
 
 type JobResult = Result<(), Box<dyn std::error::Error>>;
@@ -14,12 +14,8 @@ pub async fn handle_feed_fanout(
     redis_conn: &redis::aio::ConnectionManager,
     payload: &serde_json::Value,
 ) -> JobResult {
-    let post_id = payload["post_id"]
-        .as_str()
-        .ok_or("missing post_id")?;
-    let author_id = payload["author_id"]
-        .as_str()
-        .ok_or("missing author_id")?;
+    let post_id = payload["post_id"].as_str().ok_or("missing post_id")?;
+    let author_id = payload["author_id"].as_str().ok_or("missing author_id")?;
 
     let post_uuid = Uuid::parse_str(post_id)?;
     let author_uuid = Uuid::parse_str(author_id)?;
@@ -41,12 +37,11 @@ pub async fn handle_feed_fanout(
         return Ok(());
     }
 
-    let post_created_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
-        "SELECT created_at FROM posts WHERE id = $1",
-    )
-    .bind(post_uuid)
-    .fetch_one(pool)
-    .await?;
+    let post_created_at: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT created_at FROM posts WHERE id = $1")
+            .bind(post_uuid)
+            .fetch_one(pool)
+            .await?;
 
     for follower_id in &follower_ids {
         let entry_id = Uuid::now_v7();
@@ -106,12 +101,10 @@ pub async fn handle_feed_fanout(
 /// Media processing: validate, strip EXIF, generate thumbnails and display variants.
 pub async fn handle_media_processing(
     pool: &PgPool,
-    storage_base: &Path,
+    storage: &SupabaseStorageService,
     payload: &serde_json::Value,
 ) -> JobResult {
-    let media_id = payload["media_id"]
-        .as_str()
-        .ok_or("missing media_id")?;
+    let media_id = payload["media_id"].as_str().ok_or("missing media_id")?;
 
     let media_uuid = Uuid::parse_str(media_id)?;
 
@@ -133,23 +126,21 @@ pub async fn handle_media_processing(
 
     tracing::info!(media_id = media_id, media_type = %media_type, "processing media");
 
-    let original_path = storage_base.join(&original_key);
-    let body = tokio::fs::read(&original_path)
+    let body = storage
+        .download_object(&original_key)
         .await
-        .map_err(|e| format!("read {}: {}", original_path.display(), e))?;
+        .map_err(|e| format!("download {} failed: {}", original_key, e))?;
 
     if media_type == "photo" {
-        process_image(pool, storage_base, media_uuid, &original_key, &body).await?;
+        process_image(pool, storage, media_uuid, &original_key, &body).await?;
     } else if media_type == "video" {
         process_video(pool, media_uuid, &body).await?;
     }
 
-    sqlx::query(
-        "UPDATE media_items SET processing_state = 'completed' WHERE id = $1",
-    )
-    .bind(media_uuid)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE media_items SET processing_state = 'completed' WHERE id = $1")
+        .bind(media_uuid)
+        .execute(pool)
+        .await?;
 
     tracing::info!(media_id = media_id, "media processing complete");
     Ok(())
@@ -157,7 +148,7 @@ pub async fn handle_media_processing(
 
 async fn process_image(
     pool: &PgPool,
-    storage_base: &Path,
+    storage: &SupabaseStorageService,
     media_uuid: Uuid,
     original_key: &str,
     image_data: &[u8],
@@ -204,9 +195,18 @@ async fn process_image(
     let feed_key = format!("{}/feed.jpg", base_key);
     let display_key = format!("{}/display.jpg", base_key);
 
-    write_file(storage_base, &thumb_key, &thumb_bytes).await?;
-    write_file(storage_base, &feed_key, &feed_bytes).await?;
-    write_file(storage_base, &display_key, &display_bytes).await?;
+    storage
+        .upload_object(&thumb_key, &thumb_bytes, "image/jpeg")
+        .await
+        .map_err(|e| format!("upload thumbnail failed: {}", e))?;
+    storage
+        .upload_object(&feed_key, &feed_bytes, "image/jpeg")
+        .await
+        .map_err(|e| format!("upload feed image failed: {}", e))?;
+    storage
+        .upload_object(&display_key, &display_bytes, "image/jpeg")
+        .await
+        .map_err(|e| format!("upload display image failed: {}", e))?;
 
     sqlx::query(
         r#"
@@ -253,11 +253,7 @@ fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, image::Imag
     Ok(output)
 }
 
-async fn process_video(
-    pool: &PgPool,
-    media_uuid: Uuid,
-    video_data: &[u8],
-) -> JobResult {
+async fn process_video(pool: &PgPool, media_uuid: Uuid, video_data: &[u8]) -> JobResult {
     sqlx::query(
         r#"
         UPDATE media_items
@@ -274,38 +270,12 @@ async fn process_video(
     Ok(())
 }
 
-async fn write_file(
-    storage_base: &Path,
-    key: &str,
-    data: &[u8],
-) -> JobResult {
-    let path = storage_base.join(key);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("mkdir failed for {}: {}", parent.display(), e))?;
-    }
-    let tmp_path = path.with_extension("tmp");
-    tokio::fs::write(&tmp_path, data)
-        .await
-        .map_err(|e| format!("write failed for {}: {}", path.display(), e))?;
-    tokio::fs::rename(&tmp_path, &path)
-        .await
-        .map_err(|e| format!("rename failed for {}: {}", path.display(), e))?;
-    Ok(())
-}
-
 /// Notification job handler: creates a notification record from the job payload.
-pub async fn handle_notification(
-    pool: &PgPool,
-    payload: &serde_json::Value,
-) -> JobResult {
+pub async fn handle_notification(pool: &PgPool, payload: &serde_json::Value) -> JobResult {
     let recipient_id = payload["recipient_id"]
         .as_str()
         .ok_or("missing recipient_id")?;
-    let actor_id = payload["actor_id"]
-        .as_str()
-        .ok_or("missing actor_id")?;
+    let actor_id = payload["actor_id"].as_str().ok_or("missing actor_id")?;
     let notification_type = payload["notification_type"]
         .as_str()
         .ok_or("missing notification_type")?;

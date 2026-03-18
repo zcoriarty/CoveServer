@@ -15,7 +15,7 @@ pub struct AdminServiceImpl {
     pool: PgPool,
     jwt_secret: String,
     redis_conn: redis::aio::ConnectionManager,
-    storage: crate::storage::object_store::LocalStorageService,
+    storage: crate::storage::object_store::SupabaseStorageService,
 }
 
 impl AdminServiceImpl {
@@ -23,7 +23,7 @@ impl AdminServiceImpl {
         pool: PgPool,
         jwt_secret: String,
         redis_conn: redis::aio::ConnectionManager,
-        storage: crate::storage::object_store::LocalStorageService,
+        storage: crate::storage::object_store::SupabaseStorageService,
     ) -> Self {
         Self {
             pool,
@@ -166,16 +166,15 @@ impl AdminService for AdminServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let result = sqlx::query(
-            r#"UPDATE invites SET revoked = TRUE WHERE code = $1 AND NOT revoked"#,
-        )
-        .bind(&req.invite_code)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "revoke invite failed");
-            Status::internal("internal error")
-        })?;
+        let result =
+            sqlx::query(r#"UPDATE invites SET revoked = TRUE WHERE code = $1 AND NOT revoked"#)
+                .bind(&req.invite_code)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "revoke invite failed");
+                    Status::internal("internal error")
+                })?;
 
         if result.rows_affected() == 0 {
             return Err(Status::not_found("invite not found or already revoked"));
@@ -202,8 +201,8 @@ impl AdminService for AdminServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
 
         if target == auth.user_id {
             return Err(Status::invalid_argument("cannot suspend yourself"));
@@ -224,11 +223,13 @@ impl AdminService for AdminServiceImpl {
             return Err(Status::not_found("user not found or already suspended"));
         }
 
-        sqlx::query(r#"UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL"#)
-            .bind(target.as_uuid())
-            .execute(&self.pool)
-            .await
-            .ok();
+        sqlx::query(
+            r#"UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL"#,
+        )
+        .bind(target.as_uuid())
+        .execute(&self.pool)
+        .await
+        .ok();
 
         crate::audit::log_action(
             &self.pool,
@@ -252,8 +253,8 @@ impl AdminService for AdminServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
 
         let result = sqlx::query(
             r#"UPDATE users SET account_state = 'active' WHERE id = $1 AND account_state = 'suspended'"#,
@@ -290,10 +291,7 @@ impl AdminService for AdminServiceImpl {
     ) -> Result<Response<GetSystemHealthResponse>, Status> {
         let _auth = self.auth(request.metadata())?;
 
-        let db_healthy = sqlx::query("SELECT 1")
-            .fetch_one(&self.pool)
-            .await
-            .is_ok();
+        let db_healthy = sqlx::query("SELECT 1").fetch_one(&self.pool).await.is_ok();
 
         let redis_healthy = {
             let mut conn = self.redis_conn.clone();
@@ -305,26 +303,23 @@ impl AdminService for AdminServiceImpl {
 
         let storage_healthy = self.storage.health_check().await.is_ok();
 
-        let active_users: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE account_state = 'active'",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let active_users: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE account_state = 'active'")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
-        let total_posts: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM posts WHERE NOT is_deleted",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let total_posts: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM posts WHERE NOT is_deleted")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
-        let storage_used: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(file_size_bytes), 0) FROM media_items",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let storage_used: i64 =
+            sqlx::query_scalar("SELECT COALESCE(SUM(file_size_bytes), 0) FROM media_items")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
         Ok(Response::new(GetSystemHealthResponse {
             database_healthy: db_healthy,

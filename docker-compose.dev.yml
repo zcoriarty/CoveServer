@@ -4,27 +4,16 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ["cove-server"]
+    env_file:
+      - .env
     environment:
-      COVE__SERVER__HOST: "0.0.0.0"
-      COVE__SERVER__PORT: "50051"
-      COVE__DATABASE__URL: "postgres://cove:${POSTGRES_PASSWORD:-cove_secret}@postgres:5432/cove"
-      COVE__REDIS__URL: "redis://redis:6379/"
-      COVE__STORAGE__DATA_PATH: "/opt/cove/data/media"
-      COVE__AUTH__JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
-      COVE__PUSH__ENABLED: "${COVE_PUSH__ENABLED:-false}"
-      COVE__PUSH__APNS_KEY_ID: "${COVE_PUSH__APNS_KEY_ID:-}"
-      COVE__PUSH__APNS_TEAM_ID: "${COVE_PUSH__APNS_TEAM_ID:-}"
-      COVE__PUSH__APNS_BUNDLE_ID: "${COVE_PUSH__APNS_BUNDLE_ID:-}"
-      COVE__PUSH__APNS_PRIVATE_KEY_PATH: "/run/secrets/apns_auth_key.p8"
-      COVE__PUSH__DEFAULT_ENVIRONMENT: "${COVE_PUSH__DEFAULT_ENVIRONMENT:-development}"
+      COVE_SERVER__HOST: "0.0.0.0"
+      COVE_SERVER__PORT: "50051"
+      REDIS_URL: "redis://redis:6379/"
     ports:
       - "0.0.0.0:50051:50051"
-    volumes:
-      - media-data:/opt/cove/data/media
-      - "${COVE_PUSH__APNS_PRIVATE_KEY_PATH:-/dev/null}:/run/secrets/apns_auth_key.p8:ro"
+      - "0.0.0.0:9090:9090"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -34,39 +23,18 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ["cove-worker"]
+    env_file:
+      - .env
     environment:
-      COVE_DATABASE_URL: "postgres://cove:${POSTGRES_PASSWORD:-cove_secret}@postgres:5432/cove"
-      COVE_REDIS_URL: "redis://redis:6379/"
-      COVE_STORAGE_DATA_PATH: "/opt/cove/data/media"
-    volumes:
-      - media-data:/opt/cove/data/media
+      REDIS_URL: "redis://redis:6379/"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
 
-  postgres:
-    image: postgres:16-bookworm
-    environment:
-      POSTGRES_DB: cove
-      POSTGRES_USER: cove
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-cove_secret}"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
-      - ./migrations/004_add_post_location.sql:/docker-entrypoint-initdb.d/004_add_post_location.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cove -d cove"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   redis:
     image: redis:7-bookworm
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-}"]
+    command: ["redis-server"]
     volumes:
       - redis-data:/data
     healthcheck:
@@ -77,6 +45,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres-data:
   redis-data:
-  media-data:

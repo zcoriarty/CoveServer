@@ -1,29 +1,20 @@
 //! Media service and gRPC handler.
 
 use crate::auth;
-use crate::storage::object_store::LocalStorageService;
+use crate::storage::object_store::SupabaseStorageService;
 use cove_common::id::{MediaId, UserId};
 use cove_proto::cove::media::{
-    media_service_server::MediaService, upload_media_request, DownloadMediaHeader,
-    DownloadMediaRequest, DownloadMediaResponse, download_media_response, GetMediaStatusRequest,
-    GetMediaStatusResponse, MediaVariant, ProcessingState, UploadMediaResponse,
-    UploadMediaRequest,
+    download_media_response, media_service_server::MediaService, upload_media_request,
+    DownloadMediaHeader, DownloadMediaRequest, DownloadMediaResponse, GetMediaStatusRequest,
+    GetMediaStatusResponse, MediaVariant, ProcessingState, UploadMediaRequest, UploadMediaResponse,
 };
 use sqlx::{PgPool, Row};
-use tonic::{Request, Response, Status, Streaming};
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status, Streaming};
 
-const ALLOWED_IMAGE_TYPES: &[&str] = &[
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-];
+const ALLOWED_IMAGE_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
-const ALLOWED_VIDEO_TYPES: &[&str] = &[
-    "video/mp4",
-    "video/quicktime",
-];
+const ALLOWED_VIDEO_TYPES: &[&str] = &["video/mp4", "video/quicktime"];
 
 const MAX_IMAGE_SIZE_BYTES: i64 = 20 * 1024 * 1024; // 20 MB
 const MAX_VIDEO_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
@@ -32,12 +23,12 @@ const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024; // 64 KB
 
 pub struct MediaServiceImpl {
     pub pool: PgPool,
-    pub storage: LocalStorageService,
+    pub storage: SupabaseStorageService,
     pub jwt_secret: String,
 }
 
 impl MediaServiceImpl {
-    pub fn new(pool: PgPool, storage: LocalStorageService, jwt_secret: String) -> Self {
+    pub fn new(pool: PgPool, storage: SupabaseStorageService, jwt_secret: String) -> Self {
         Self {
             pool,
             storage,
@@ -45,11 +36,19 @@ impl MediaServiceImpl {
         }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 
-    fn validate_upload(&self, media_type: i32, file_size: i64, content_type: &str) -> Result<(), Status> {
+    fn validate_upload(
+        &self,
+        media_type: i32,
+        file_size: i64,
+        content_type: &str,
+    ) -> Result<(), Status> {
         let (allowed_types, max_size) = match media_type {
             1 => (ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_BYTES),
             2 => (ALLOWED_VIDEO_TYPES, MAX_VIDEO_SIZE_BYTES),
@@ -123,7 +122,10 @@ impl MediaService for MediaServiceImpl {
             .next()
             .unwrap_or("bin")
             .to_lowercase();
-        let sanitized_ext = if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "mp4" | "mov") {
+        let sanitized_ext = if matches!(
+            ext.as_str(),
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "mp4" | "mov"
+        ) {
             ext
         } else {
             match metadata.media_type {
@@ -132,11 +134,7 @@ impl MediaService for MediaServiceImpl {
             }
         };
 
-        let storage_key = format!(
-            "media/{}/original.{}",
-            media_id.as_uuid(),
-            sanitized_ext
-        );
+        let storage_key = format!("media/{}/original.{}", media_id.as_uuid(), sanitized_ext);
 
         let mut file_data = Vec::with_capacity(metadata.file_size_bytes as usize);
         while let Some(msg) = stream.message().await? {
@@ -144,15 +142,21 @@ impl MediaService for MediaServiceImpl {
                 Some(upload_media_request::Payload::ChunkData(chunk)) => {
                     file_data.extend_from_slice(&chunk);
                     if file_data.len() as i64 > metadata.file_size_bytes {
-                        return Err(Status::invalid_argument("upload exceeds declared file size"));
+                        return Err(Status::invalid_argument(
+                            "upload exceeds declared file size",
+                        ));
                     }
                 }
-                _ => return Err(Status::invalid_argument("expected chunk_data after metadata")),
+                _ => {
+                    return Err(Status::invalid_argument(
+                        "expected chunk_data after metadata",
+                    ))
+                }
             }
         }
 
         self.storage
-            .write_file(&storage_key, &file_data)
+            .upload_object(&storage_key, &file_data, &metadata.content_type)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -293,7 +297,9 @@ impl MediaService for MediaServiceImpl {
         };
 
         if !authorized {
-            return Err(Status::permission_denied("not authorized to access this media"));
+            return Err(Status::permission_denied(
+                "not authorized to access this media",
+            ));
         }
 
         let variant = req.variant();
@@ -306,7 +312,7 @@ impl MediaService for MediaServiceImpl {
 
         let file_data = self
             .storage
-            .read_file(&storage_key)
+            .download_object(&storage_key)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -317,10 +323,12 @@ impl MediaService for MediaServiceImpl {
 
         tokio::spawn(async move {
             let header = DownloadMediaResponse {
-                payload: Some(download_media_response::Payload::Header(DownloadMediaHeader {
-                    content_type: file_content_type,
-                    file_size_bytes: file_len,
-                })),
+                payload: Some(download_media_response::Payload::Header(
+                    DownloadMediaHeader {
+                        content_type: file_content_type,
+                        file_size_bytes: file_len,
+                    },
+                )),
             };
             if tx.send(Ok(header)).await.is_err() {
                 return;
@@ -349,13 +357,11 @@ impl MediaService for MediaServiceImpl {
         let media_id = MediaId::parse(&req.media_id)
             .map_err(|_| Status::invalid_argument("invalid media_id"))?;
 
-        let row = sqlx::query(
-            "SELECT processing_state FROM media_items WHERE id = $1",
-        )
-        .bind(media_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?;
+        let row = sqlx::query("SELECT processing_state FROM media_items WHERE id = $1")
+            .bind(media_id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         let row = row.ok_or_else(|| Status::not_found("media not found"))?;
         let state_str: String = row.get(0);

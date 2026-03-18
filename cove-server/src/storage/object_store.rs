@@ -46,6 +46,7 @@ impl SupabaseStorageService {
 
     fn auth_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         req.header("apikey", &self.api_key)
+            .bearer_auth(&self.api_key)
     }
 
     fn object_url(&self, key: &str) -> String {

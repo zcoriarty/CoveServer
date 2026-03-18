@@ -167,7 +167,7 @@ All APIs are **gRPC** over HTTP/2. Package: `cove.*`.
 
 | Env Var | Purpose |
 |---------|---------|
-| `DATABASE_URL` or `SUPABASE_URL` | PostgreSQL connection string |
+| `DATABASE_URL` | PostgreSQL connection string |
 | `SUPABASE_STORAGE_ENDPOINT` / `SUPABASE_STORAGE_BUCKET` / `SUPABASE_SECRET_KEY` | Supabase Storage access |
 | `JWT_SECRET` or `COVE_AUTH__JWT_SECRET` | JWT signing secret |
 | `PORT` / `COVE_SERVER__PORT` | Server bind address |

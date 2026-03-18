@@ -99,7 +99,7 @@ docker compose up -d
 
 All settings can be configured via:
 - **Environment variables** with `COVE_` prefix (e.g., `COVE_DATABASE__URL`)
-- **Railway/Supabase standard envs** (`PORT`, `DATABASE_URL`, `SUPABASE_*`, `REDIS_URL`, `JWT_SECRET`)
+- **Railway/Supabase standard envs** (`PORT`, `DATABASE_URL`, `SUPABASE_STORAGE_*`, `SUPABASE_SECRET_KEY`, `REDIS_URL`, `JWT_SECRET`)
 - **TOML config file** at `config/cove.toml`
 
 Environment variables take precedence over the config file.
@@ -132,8 +132,7 @@ Deploy as two Railway services from this repo:
 
 Required environment variables for both services:
 
-- `SUPABASE_URL` (or `DATABASE_URL`)
-- `SUPABASE_PASSWORD` (if `SUPABASE_URL` contains `[YOUR-PASSWORD]`)
+- `DATABASE_URL`
 - `SUPABASE_STORAGE_ENDPOINT`
 - `SUPABASE_STORAGE_BUCKET`
 - `SUPABASE_SECRET_KEY`

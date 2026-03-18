@@ -165,7 +165,7 @@ impl CoveConfig {
             .and_then(|p| p.parse::<i64>().ok())
             .unwrap_or(50051);
 
-        let default_database_url = resolve_database_url().unwrap_or_default();
+        let default_database_url = first_non_empty_env(&["DATABASE_URL"]).unwrap_or_default();
         let default_redis_url =
             first_non_empty_env(&["REDIS_URL", "COVE_REDIS__URL", "COVE_REDIS_URL"])
                 .unwrap_or_else(|| "redis://localhost:6379".to_string());
@@ -225,13 +225,13 @@ impl CoveConfig {
     fn validate(&self) -> Result<(), config::ConfigError> {
         if self.database.url.trim().is_empty() {
             return Err(config::ConfigError::Message(
-                "database.url is required (set DATABASE_URL or SUPABASE_URL)".to_string(),
+                "database.url is required (set DATABASE_URL)".to_string(),
             ));
         }
 
         if self.database.url.contains("[YOUR-PASSWORD]") {
             return Err(config::ConfigError::Message(
-                "database.url still contains [YOUR-PASSWORD]; set SUPABASE_PASSWORD or provide DATABASE_URL with the real password".to_string(),
+                "database.url still contains [YOUR-PASSWORD]; provide DATABASE_URL with the real password".to_string(),
             ));
         }
 
@@ -262,18 +262,4 @@ fn first_non_empty_env(keys: &[&str]) -> Option<String> {
         Ok(value) if !value.trim().is_empty() => Some(value),
         _ => None,
     })
-}
-
-fn resolve_database_url() -> Option<String> {
-    if let Some(url) =
-        first_non_empty_env(&["DATABASE_URL", "COVE_DATABASE__URL", "COVE_DATABASE_URL"])
-    {
-        return Some(url);
-    }
-
-    let mut supabase_url = first_non_empty_env(&["SUPABASE_URL"])?;
-    if let Some(password) = first_non_empty_env(&["SUPABASE_PASSWORD"]) {
-        supabase_url = supabase_url.replace("[YOUR-PASSWORD]", &password);
-    }
-    Some(supabase_url)
 }

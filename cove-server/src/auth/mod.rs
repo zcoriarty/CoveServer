@@ -76,6 +76,9 @@ pub struct AuthServiceImpl {
 }
 
 impl AuthServiceImpl {
+    const HARDCODED_DEV_INVITE_CODE: &'static str = "COVEDEV";
+    const HARDCODED_DEV_INVITER_USERNAME: &'static str = "cove_dev";
+
     pub fn new(
         pool: PgPool,
         token_service: TokenService,
@@ -93,6 +96,11 @@ impl AuthServiceImpl {
     fn auth(&self, request_metadata: &MetadataMap) -> Result<AuthContext, Status> {
         extract_auth(request_metadata, &self.config.auth.jwt_secret).map_err(Into::into)
     }
+
+    fn is_hardcoded_dev_invite(code: &str) -> bool {
+        code.trim()
+            .eq_ignore_ascii_case(Self::HARDCODED_DEV_INVITE_CODE)
+    }
 }
 
 #[tonic::async_trait]
@@ -102,10 +110,11 @@ impl AuthService for AuthServiceImpl {
         request: Request<RegisterRequest>,
     ) -> Result<Response<RegisterResponse>, Status> {
         let req = request.into_inner();
+        let invite_code = req.invite_code.trim();
 
         tracing::info!(username = %req.username, "register attempt");
 
-        if req.invite_code.is_empty() {
+        if invite_code.is_empty() {
             return Err(Status::invalid_argument("invite code required"));
         }
         if req.username.is_empty() {
@@ -118,43 +127,49 @@ impl AuthService for AuthServiceImpl {
             return Err(Status::invalid_argument("password required"));
         }
 
-        // Validate invite code and get inviter
-        let invite_row = sqlx::query(
-            r#"
-            SELECT i.id, i.created_by, i.max_uses, i.use_count, i.expires_at, i.revoked, u.username
-            FROM invites i
-            JOIN users u ON u.id = i.created_by
-            WHERE i.code = $1
-            "#,
-        )
-        .bind(&req.invite_code)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "database error");
-            Status::internal("internal error")
-        })?;
+        let (invite_id, created_by): (Option<uuid::Uuid>, Option<uuid::Uuid>) =
+            if Self::is_hardcoded_dev_invite(invite_code) {
+                (None, None)
+            } else {
+                // Validate invite code and get inviter.
+                let invite_row = sqlx::query(
+                    r#"
+                    SELECT i.id, i.created_by, i.max_uses, i.use_count, i.expires_at, i.revoked
+                    FROM invites i
+                    WHERE i.code = $1
+                    "#,
+                )
+                .bind(invite_code)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "database error");
+                    Status::internal("internal error")
+                })?;
 
-        let invite = invite_row.ok_or_else(|| Status::invalid_argument("invalid invite code"))?;
-        let invite_id: uuid::Uuid = invite.get(0);
-        let created_by: uuid::Uuid = invite.get(1);
-        let max_uses: i32 = invite.get(2);
-        let use_count: i32 = invite.get(3);
-        let expires_at: Option<chrono::DateTime<chrono::Utc>> = invite.get(4);
-        let revoked: bool = invite.get(5);
-        let invited_by_username: String = invite.get(6);
+                let invite = invite_row.ok_or_else(|| Status::invalid_argument("invalid invite code"))?;
+                let invite_id: uuid::Uuid = invite.get(0);
+                let created_by: uuid::Uuid = invite.get(1);
+                let max_uses: i32 = invite.get(2);
+                let use_count: i32 = invite.get(3);
+                let expires_at: Option<chrono::DateTime<chrono::Utc>> = invite.get(4);
+                let revoked: bool = invite.get(5);
 
-        if revoked {
-            return Err(Status::invalid_argument("invite code has been revoked"));
-        }
-        if use_count >= max_uses {
-            return Err(Status::invalid_argument("invite code has reached max uses"));
-        }
-        if let Some(exp) = expires_at {
-            if exp < chrono::Utc::now() {
-                return Err(Status::invalid_argument("invite code has expired"));
+                if revoked {
+                    return Err(Status::invalid_argument("invite code has been revoked"));
+                }
+                if use_count >= max_uses {
+                    return Err(Status::invalid_argument("invite code has reached max uses"));
+                }
+                if let Some(exp) = expires_at {
+                    if exp < chrono::Utc::now() {
+                        return Err(Status::invalid_argument("invite code has expired"));
+                    }
+                }
+
+                (Some(invite_id), Some(created_by))
             }
-        }
+        ;
 
         // Check username uniqueness
         let username_taken = sqlx::query_scalar::<_, bool>(
@@ -263,18 +278,20 @@ impl AuthService for AuthServiceImpl {
             Status::internal("internal error")
         })?;
 
-        sqlx::query(
-            r#"
-            UPDATE invites SET use_count = use_count + 1 WHERE id = $1
-            "#,
-        )
-        .bind(invite_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "update invite count failed");
-            Status::internal("internal error")
-        })?;
+        if let Some(invite_id) = invite_id {
+            sqlx::query(
+                r#"
+                UPDATE invites SET use_count = use_count + 1 WHERE id = $1
+                "#,
+            )
+            .bind(invite_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "update invite count failed");
+                Status::internal("internal error")
+            })?;
+        }
 
         tx.commit().await.map_err(|e| {
             tracing::error!(error = %e, "commit failed");
@@ -599,11 +616,19 @@ impl AuthService for AuthServiceImpl {
         request: Request<ValidateInviteRequest>,
     ) -> Result<Response<ValidateInviteResponse>, Status> {
         let req = request.into_inner();
+        let invite_code = req.invite_code.trim();
 
-        if req.invite_code.is_empty() {
+        if invite_code.is_empty() {
             return Ok(Response::new(ValidateInviteResponse {
                 valid: false,
                 invited_by_username: String::new(),
+            }));
+        }
+
+        if Self::is_hardcoded_dev_invite(invite_code) {
+            return Ok(Response::new(ValidateInviteResponse {
+                valid: true,
+                invited_by_username: Self::HARDCODED_DEV_INVITER_USERNAME.to_string(),
             }));
         }
 
@@ -615,7 +640,7 @@ impl AuthService for AuthServiceImpl {
             WHERE i.code = $1
             "#,
         )
-        .bind(&req.invite_code)
+        .bind(invite_code)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| {

@@ -175,7 +175,7 @@ impl CoveConfig {
         let default_storage_endpoint =
             first_non_empty_env(&["SUPABASE_STORAGE_ENDPOINT"]).unwrap_or_default();
         let default_storage_bucket =
-            first_non_empty_env(&["SUPABASE_STORAGE_BUCKET"]).unwrap_or_default();
+            first_non_empty_env(&["SUPABASE_STORAGE_BUCKET"]).unwrap_or_else(|| "media".to_string());
         let default_storage_api_key =
             first_non_empty_env(&["SUPABASE_SECRET_KEY"]).unwrap_or_default();
 

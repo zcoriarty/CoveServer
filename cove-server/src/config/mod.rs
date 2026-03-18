@@ -217,7 +217,19 @@ impl CoveConfig {
             )
             .build()?;
 
-        let parsed: Self = cfg.try_deserialize()?;
+        let mut parsed: Self = cfg.try_deserialize()?;
+        if let Ok(raw_port) = std::env::var("PORT") {
+            if let Ok(platform_port) = raw_port.parse::<u16>() {
+                if parsed.server.port != platform_port {
+                    tracing::warn!(
+                        configured_port = parsed.server.port,
+                        platform_port,
+                        "overriding server.port with PORT environment value"
+                    );
+                    parsed.server.port = platform_port;
+                }
+            }
+        }
         parsed.validate()?;
         Ok(parsed)
     }

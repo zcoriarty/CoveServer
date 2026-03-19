@@ -80,7 +80,7 @@ impl PostServiceImpl {
             SELECT id, media_type, width, height, aspect_ratio, duration_seconds
             FROM media_items
             WHERE post_id = $1 AND processing_state = 'completed'
-            ORDER BY created_at ASC
+            ORDER BY order_index ASC, created_at ASC
             "#,
         )
         .bind(post_id.as_uuid())
@@ -170,6 +170,19 @@ impl PostService for PostServiceImpl {
             Visibility::Private => "private",
             _ => "followers",
         };
+        let parsed_media_ids: Vec<MediaId> = req
+            .media_ids
+            .iter()
+            .map(|media_id| {
+                MediaId::parse(media_id)
+                    .map_err(|_| Status::invalid_argument("invalid media_id"))
+            })
+            .collect::<Result<_, _>>()?;
+        if parsed_media_ids.is_empty() {
+            return Err(Status::invalid_argument(
+                "at least one media_id is required",
+            ));
+        }
 
         let post_id = PostId::new();
         let created_at = chrono::Utc::now();
@@ -190,16 +203,45 @@ impl PostService for PostServiceImpl {
             (None, None, None)
         };
 
+        let post_type = if parsed_media_ids.len() > 1 {
+            "carousel"
+        } else {
+            let media_type = sqlx::query_scalar::<_, String>(
+                r#"
+                SELECT media_type
+                FROM media_items
+                WHERE id = $1 AND owner_id = $2 AND post_id IS NULL
+                "#,
+            )
+            .bind(parsed_media_ids[0].as_uuid())
+            .bind(auth.user_id.as_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+            match media_type.as_deref() {
+                Some("video") => "video",
+                Some(_) => "photo",
+                None => {
+                    return Err(Status::invalid_argument(format!(
+                        "media {} not found or already attached",
+                        req.media_ids[0]
+                    )));
+                }
+            }
+        };
+
         sqlx::query(
             r#"
             INSERT INTO posts (id, author_id, caption, visibility, post_type, created_at, location_lat, location_lng, location_name)
-            VALUES ($1, $2, $3, $4, 'photo', $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(post_id.as_uuid())
         .bind(auth.user_id.as_uuid())
         .bind(req.caption.as_str())
         .bind(visibility)
+        .bind(post_type)
         .bind(created_at)
         .bind(loc_lat)
         .bind(loc_lng)
@@ -208,18 +250,20 @@ impl PostService for PostServiceImpl {
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
 
-        for media_id_str in &req.media_ids {
-            let media_id = MediaId::parse(media_id_str)
-                .map_err(|_| Status::invalid_argument("invalid media_id"))?;
-
+        for (idx, (media_id, media_id_str)) in parsed_media_ids
+            .iter()
+            .zip(req.media_ids.iter())
+            .enumerate()
+        {
             let result = sqlx::query(
                 r#"
                 UPDATE media_items
-                SET post_id = $1
-                WHERE id = $2 AND owner_id = $3 AND post_id IS NULL
+                SET post_id = $1, order_index = $2
+                WHERE id = $3 AND owner_id = $4 AND post_id IS NULL
                 "#,
             )
             .bind(post_id.as_uuid())
+            .bind(idx as i32)
             .bind(media_id.as_uuid())
             .bind(auth.user_id.as_uuid())
             .execute(&mut *tx)

@@ -310,11 +310,11 @@ impl ProfileService for ProfileServiceImpl {
                 SELECT p.id, p.created_at, p.post_type,
                        (SELECT m.id FROM media_items m
                         WHERE m.post_id = p.id
-                        ORDER BY m.id
+                        ORDER BY m.order_index ASC, m.created_at ASC
                         LIMIT 1) as first_media_id,
                        (SELECT m.media_type FROM media_items m
                         WHERE m.post_id = p.id
-                        ORDER BY m.id
+                        ORDER BY m.order_index ASC, m.created_at ASC
                         LIMIT 1) as first_media_type,
                        (SELECT COUNT(*)::int FROM media_items m WHERE m.post_id = p.id) as media_count
                 FROM posts p
@@ -341,11 +341,11 @@ impl ProfileService for ProfileServiceImpl {
                 SELECT p.id, p.created_at, p.post_type,
                        (SELECT m.id FROM media_items m
                         WHERE m.post_id = p.id
-                        ORDER BY m.id
+                        ORDER BY m.order_index ASC, m.created_at ASC
                         LIMIT 1) as first_media_id,
                        (SELECT m.media_type FROM media_items m
                         WHERE m.post_id = p.id
-                        ORDER BY m.id
+                        ORDER BY m.order_index ASC, m.created_at ASC
                         LIMIT 1) as first_media_type,
                        (SELECT COUNT(*)::int FROM media_items m WHERE m.post_id = p.id) as media_count
                 FROM posts p

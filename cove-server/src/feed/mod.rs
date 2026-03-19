@@ -98,7 +98,7 @@ impl FeedServiceImpl {
             SELECT post_id, id, media_type, width, height, aspect_ratio, duration_seconds
             FROM media_items
             WHERE post_id = ANY($1) AND processing_state = 'completed'
-            ORDER BY post_id, created_at ASC
+            ORDER BY post_id, order_index ASC, created_at ASC
             "#,
         )
         .bind(&post_ids)

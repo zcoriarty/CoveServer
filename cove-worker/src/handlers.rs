@@ -158,8 +158,8 @@ async fn process_image(
     let (width, height) = (img.width(), img.height());
     let aspect_ratio = width as f64 / height.max(1) as f64;
 
-    let thumbnail = img.thumbnail(480, 480);
-    let thumb_bytes = encode_jpeg(&thumbnail, 88)?;
+    let thumbnail = img.thumbnail(400, 400);
+    let thumb_bytes = encode_jpeg(&thumbnail, 84)?;
 
     let feed_img = if width > 800 {
         let target_height = ((800.0 / aspect_ratio).round() as u32).max(1);
@@ -167,15 +167,15 @@ async fn process_image(
     } else {
         img.clone()
     };
-    let feed_bytes = encode_jpeg(&feed_img, 90)?;
+    let feed_bytes = encode_jpeg(&feed_img, 86)?;
 
-    let display_img = if width > 1600 {
-        let target_height = ((1600.0 / aspect_ratio).round() as u32).max(1);
-        img.resize(1600, target_height, image::imageops::FilterType::Lanczos3)
+    let display_img = if width > 1400 {
+        let target_height = ((1400.0 / aspect_ratio).round() as u32).max(1);
+        img.resize(1400, target_height, image::imageops::FilterType::Lanczos3)
     } else {
         img.clone()
     };
-    let display_bytes = encode_jpeg(&display_img, 92)?;
+    let display_bytes = encode_jpeg(&display_img, 88)?;
 
     let base_key = original_key
         .rsplit_once('/')

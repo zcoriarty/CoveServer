@@ -293,7 +293,22 @@ impl MediaService for MediaServiceImpl {
                 false
             }
         } else {
-            false
+            // Non-post media is still private by default, except the owner's current
+            // profile avatar which should be visible in user summaries/profile headers.
+            sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM profiles p
+                    WHERE p.user_id = $1 AND p.avatar_media_id = $2
+                )
+                "#,
+            )
+            .bind(owner_id.as_uuid())
+            .bind(media_id.as_uuid())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
         };
 
         if !authorized {

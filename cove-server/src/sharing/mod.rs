@@ -222,12 +222,17 @@ impl ShareService for ShareServiceImpl {
                 acc
             });
 
-        let mut sender_map: std::collections::HashMap<uuid::Uuid, (String, String)> =
+        let mut sender_map: std::collections::HashMap<uuid::Uuid, (String, String, Option<uuid::Uuid>)> =
             std::collections::HashMap::new();
 
         for sid in &sender_ids {
-            if let Ok(row) = sqlx::query_as::<_, (String, String)>(
-                "SELECT u.username, COALESCE(u.display_name, '') FROM users u WHERE u.id = $1",
+            if let Ok(row) = sqlx::query_as::<_, (String, String, Option<uuid::Uuid>)>(
+                r#"
+                SELECT u.username, COALESCE(u.display_name, ''), p.avatar_media_id
+                FROM users u
+                LEFT JOIN profiles p ON p.user_id = u.id
+                WHERE u.id = $1
+                "#,
             )
             .bind(sid)
             .fetch_one(&self.pool)
@@ -240,15 +245,18 @@ impl ShareService for ShareServiceImpl {
         let items: Vec<SharedPostItem> = truncated
             .iter()
             .map(|(share_id, sender_id, post_id, created_at)| {
-                let (username, display_name) = sender_map
+                let (username, display_name, avatar_media_id) = sender_map
                     .get(sender_id)
                     .cloned()
+                    .unwrap_or_default();
+                let avatar_url = avatar_media_id
+                    .map(|media_id| format!("/media/{}", media_id))
                     .unwrap_or_default();
                 let sender = build_user_summary(
                     &UserId::from_uuid(*sender_id),
                     username,
                     display_name,
-                    String::new(),
+                    avatar_url,
                     false,
                 );
                 SharedPostItem {

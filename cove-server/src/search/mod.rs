@@ -212,6 +212,7 @@ impl SearchService for SearchServiceImpl {
             String,
             Option<String>,
             Option<uuid::Uuid>,
+            Option<uuid::Uuid>,
             Option<String>,
             Option<i32>,
             Option<i32>,
@@ -224,12 +225,13 @@ impl SearchService for SearchServiceImpl {
             sqlx::query_as(
                 r#"
                 SELECT p.id, p.author_id, p.caption,
-                       u.username, u.display_name,
+                       u.username, u.display_name, pr.avatar_media_id,
                        m.id as media_id, m.media_type,
                        m.width, m.height, m.aspect_ratio, m.duration_seconds,
                        p.created_at
                 FROM posts p
                 JOIN users u ON u.id = p.author_id
+                LEFT JOIN profiles pr ON pr.user_id = u.id
                 LEFT JOIN LATERAL (
                     SELECT id, media_type, width, height, aspect_ratio, duration_seconds
                     FROM media_items
@@ -268,12 +270,13 @@ impl SearchService for SearchServiceImpl {
             sqlx::query_as(
                 r#"
                 SELECT p.id, p.author_id, p.caption,
-                       u.username, u.display_name,
+                       u.username, u.display_name, pr.avatar_media_id,
                        m.id as media_id, m.media_type,
                        m.width, m.height, m.aspect_ratio, m.duration_seconds,
                        p.created_at
                 FROM posts p
                 JOIN users u ON u.id = p.author_id
+                LEFT JOIN profiles pr ON pr.user_id = u.id
                 LEFT JOIN LATERAL (
                     SELECT id, media_type, width, height, aspect_ratio, duration_seconds
                     FROM media_items
@@ -314,18 +317,21 @@ impl SearchService for SearchServiceImpl {
         let results: Vec<SearchPostResult> = truncated
             .iter()
             .cloned()
-            .map(|(post_id, author_id, caption, username, display_name, media_id, media_type, width, height, aspect_ratio, duration_seconds, _)| {
+            .map(|(post_id, author_id, caption, username, display_name, avatar_media_id, media_id, media_type, width, height, aspect_ratio, duration_seconds, _)| {
                 let caption_snippet = if caption.len() > snippet_len {
                     format!("{}...", &caption[..snippet_len])
                 } else {
                     caption.clone()
                 };
+                let avatar_url = avatar_media_id
+                    .map(|media_id| format!("/media/{}", media_id))
+                    .unwrap_or_default();
 
                 let author = build_user_summary(
                     &cove_common::id::UserId::from_uuid(*author_id),
                     username.clone(),
                     display_name.as_deref().unwrap_or_default().to_string(),
-                    String::new(),
+                    avatar_url,
                     false,
                 );
 
@@ -361,7 +367,7 @@ impl SearchService for SearchServiceImpl {
             rows.get(pagination.limit as usize - 1)
                 .map(|r| {
                     PaginationParams::encode_cursor(&CursorValue {
-                        timestamp: r.11,
+                        timestamp: r.12,
                         id: r.0,
                     })
                 })

@@ -169,12 +169,17 @@ impl NotificationService for NotificationServiceImpl {
                     acc
                 });
 
-        let mut actor_map: std::collections::HashMap<uuid::Uuid, (String, String)> =
+        let mut actor_map: std::collections::HashMap<uuid::Uuid, (String, String, Option<uuid::Uuid>)> =
             std::collections::HashMap::new();
 
         for aid in &actor_ids {
-            if let Ok(row) = sqlx::query_as::<_, (String, String)>(
-                "SELECT u.username, COALESCE(u.display_name, '') FROM users u WHERE u.id = $1",
+            if let Ok(row) = sqlx::query_as::<_, (String, String, Option<uuid::Uuid>)>(
+                r#"
+                SELECT u.username, COALESCE(u.display_name, ''), p.avatar_media_id
+                FROM users u
+                LEFT JOIN profiles p ON p.user_id = u.id
+                WHERE u.id = $1
+                "#,
             )
             .bind(aid)
             .fetch_one(&self.pool)
@@ -191,12 +196,15 @@ impl NotificationService for NotificationServiceImpl {
                     let actor = actor_id.map(|aid| {
                         actor_map
                             .get(&aid)
-                            .map(|(username, display_name)| {
+                            .map(|(username, display_name, avatar_media_id)| {
+                                let avatar_url = avatar_media_id
+                                    .map(|media_id| format!("/media/{}", media_id))
+                                    .unwrap_or_default();
                                 build_user_summary(
                                     &UserId::from_uuid(aid),
                                     username.clone(),
                                     display_name.clone(),
-                                    String::new(),
+                                    avatar_url,
                                     false,
                                 )
                             })

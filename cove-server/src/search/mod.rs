@@ -56,12 +56,19 @@ impl SearchService for SearchServiceImpl {
         let limit = (pagination.limit + 1) as i64;
         let pattern = format!("%{}%", query);
 
-        type UserRow = (uuid::Uuid, String, String, chrono::DateTime<chrono::Utc>);
+        type UserRow = (
+            uuid::Uuid,
+            String,
+            String,
+            Option<uuid::Uuid>,
+            chrono::DateTime<chrono::Utc>,
+        );
         let rows: Vec<UserRow> = if let Some(ref cursor) = pagination.cursor {
             sqlx::query_as(
                 r#"
-                SELECT u.id, u.username, COALESCE(u.display_name, ''), u.created_at
+                SELECT u.id, u.username, COALESCE(u.display_name, ''), p.avatar_media_id, u.created_at
                 FROM users u
+                LEFT JOIN profiles p ON p.user_id = u.id
                 WHERE u.account_state != 'suspended'
                   AND (u.username ILIKE $1 OR u.display_name ILIKE $1)
                   AND (u.created_at, u.id) < ($4, $5)
@@ -88,8 +95,9 @@ impl SearchService for SearchServiceImpl {
         } else {
             sqlx::query_as(
                 r#"
-                SELECT u.id, u.username, COALESCE(u.display_name, ''), u.created_at
+                SELECT u.id, u.username, COALESCE(u.display_name, ''), p.avatar_media_id, u.created_at
                 FROM users u
+                LEFT JOIN profiles p ON p.user_id = u.id
                 WHERE u.account_state != 'suspended'
                   AND (u.username ILIKE $1 OR u.display_name ILIKE $1)
                 ORDER BY
@@ -134,12 +142,15 @@ impl SearchService for SearchServiceImpl {
 
         let users: Vec<cove_proto::cove::common::UserSummary> = truncated
             .iter()
-            .map(|(id, username, display_name, _)| {
+            .map(|(id, username, display_name, avatar_media_id, _)| {
+                let avatar_url = avatar_media_id
+                    .map(|media_id| format!("/media/{}", media_id))
+                    .unwrap_or_default();
                 build_user_summary(
                     &UserId::from_uuid(*id),
                     username.clone(),
                     display_name.clone(),
-                    String::new(),
+                    avatar_url,
                     following_set.contains(id),
                 )
             })
@@ -149,7 +160,7 @@ impl SearchService for SearchServiceImpl {
             rows.get(pagination.limit as usize - 1)
                 .map(|r| {
                     PaginationParams::encode_cursor(&CursorValue {
-                        timestamp: r.3,
+                        timestamp: r.4,
                         id: r.0,
                     })
                 })

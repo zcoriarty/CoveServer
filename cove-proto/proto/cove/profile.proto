@@ -3,12 +3,15 @@ syntax = "proto3";
 package cove.profile;
 
 import "cove/common.proto";
+import "cove/post.proto";
 import "google/protobuf/timestamp.proto";
 
 service ProfileService {
   rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
   rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
   rpc GetProfileGrid(GetProfileGridRequest) returns (GetProfileGridResponse);
+  rpc GetProfilePortals(GetProfilePortalsRequest) returns (GetProfilePortalsResponse);
+  rpc GetPortalFeed(GetPortalFeedRequest) returns (GetPortalFeedResponse);
 }
 
 message GetProfileRequest {
@@ -60,4 +63,35 @@ message ProfileGridItem {
   cove.common.MediaReference thumbnail = 2;
   bool is_video = 3;
   bool is_multi = 4;
+}
+
+message GetProfilePortalsRequest {
+  string user_id = 1;
+  string post_id = 2;
+}
+
+message GetProfilePortalsResponse {
+  repeated PortalSummary portals = 1;
+  bool can_edit = 2;
+}
+
+message GetPortalFeedRequest {
+  string user_id = 1;
+  string portal_id = 2;
+  cove.common.PaginationRequest pagination = 3;
+}
+
+message GetPortalFeedResponse {
+  PortalSummary portal = 1;
+  repeated cove.post.PostDetail items = 2;
+  cove.common.PaginationResponse pagination = 3;
+}
+
+message PortalSummary {
+  string portal_id = 1;
+  string name = 2;
+  cove.common.MediaReference cover = 3;
+  int32 post_count = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  bool contains_post = 6;
 }

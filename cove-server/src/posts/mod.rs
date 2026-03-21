@@ -5,12 +5,13 @@ use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{FeedEntryId, MediaId, PostId, UserId};
 use cove_proto::cove::common::{Location, MediaReference, MediaType, UserSummary, Visibility};
 use cove_proto::cove::post::{
-    post_service_server::PostService, CreatePostRequest, CreatePostResponse, DeletePostRequest,
-    DeletePostResponse, EditCaptionRequest, EditCaptionResponse, GetPostRequest, GetPostResponse,
-    PostDetail,
+    post_service_server::PostService, AddPostToPortalRequest, AddPostToPortalResponse,
+    CreatePostRequest, CreatePostResponse, DeletePostRequest, DeletePostResponse,
+    EditCaptionRequest, EditCaptionResponse, GetPostRequest, GetPostResponse, PostDetail,
+    RemovePostFromPortalRequest, RemovePostFromPortalResponse,
 };
 use prost_types::Timestamp;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use tonic::{Request, Response, Status};
 
 /// Post service implementation.
@@ -26,6 +27,107 @@ impl PostServiceImpl {
 
     fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
+    }
+
+    fn normalize_portal_name(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        Some(trimmed.chars().take(60).collect())
+    }
+
+    async fn ensure_post_owned_by_user(
+        tx: &mut Transaction<'_, Postgres>,
+        post_id: PostId,
+        owner_id: UserId,
+    ) -> Result<(), Status> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM posts
+                WHERE id = $1 AND author_id = $2 AND NOT is_deleted
+            )
+            "#,
+        )
+        .bind(post_id.as_uuid())
+        .bind(owner_id.as_uuid())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        if !exists {
+            return Err(Status::permission_denied(
+                "only the post author can manage portals for this post",
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn resolve_or_create_portal(
+        tx: &mut Transaction<'_, Postgres>,
+        owner_id: UserId,
+        portal_id_raw: &str,
+        portal_name_raw: &str,
+    ) -> Result<Option<(uuid::Uuid, String)>, Status> {
+        let portal_id_trimmed = portal_id_raw.trim();
+        let portal_name = Self::normalize_portal_name(portal_name_raw);
+
+        if !portal_id_trimmed.is_empty() && portal_name.is_some() {
+            return Err(Status::invalid_argument(
+                "provide either portal_id or portal_name, not both",
+            ));
+        }
+
+        if !portal_id_trimmed.is_empty() {
+            let parsed_portal_id = uuid::Uuid::parse_str(portal_id_trimmed)
+                .map_err(|_| Status::invalid_argument("invalid portal_id"))?;
+            let row = sqlx::query(
+                r#"
+                SELECT id, name
+                FROM portals
+                WHERE id = $1 AND owner_id = $2
+                "#,
+            )
+            .bind(parsed_portal_id)
+            .bind(owner_id.as_uuid())
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| Status::not_found("portal not found"))?;
+
+            let portal_id: uuid::Uuid = row.get(0);
+            let name: String = row.get(1);
+            return Ok(Some((portal_id, name)));
+        }
+
+        if let Some(portal_name) = portal_name {
+            let created_portal_id = uuid::Uuid::now_v7();
+            let row = sqlx::query(
+                r#"
+                INSERT INTO portals (id, owner_id, name, created_at, updated_at)
+                VALUES ($1, $2, $3, NOW(), NOW())
+                ON CONFLICT (owner_id, lower(name))
+                DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()
+                RETURNING id, name
+                "#,
+            )
+            .bind(created_portal_id)
+            .bind(owner_id.as_uuid())
+            .bind(&portal_name)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+            let portal_id: uuid::Uuid = row.get(0);
+            let name: String = row.get(1);
+            return Ok(Some((portal_id, name)));
+        }
+
+        Ok(None)
     }
 
     /// Assembles a PostDetail proto from DB rows.
@@ -278,6 +380,35 @@ impl PostService for PostServiceImpl {
             }
         }
 
+        if let Some((portal_id, _)) = Self::resolve_or_create_portal(
+            &mut tx,
+            auth.user_id,
+            &req.portal_id,
+            &req.portal_name,
+        )
+        .await?
+        {
+            sqlx::query(
+                r#"
+                INSERT INTO portal_posts (portal_id, post_id, added_at)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (portal_id, post_id) DO NOTHING
+                "#,
+            )
+            .bind(portal_id)
+            .bind(post_id.as_uuid())
+            .bind(created_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+            sqlx::query("UPDATE portals SET updated_at = NOW() WHERE id = $1")
+                .bind(portal_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
+
         // Insert the author's own feed entry and bump post_count synchronously
         // so the author sees their post immediately without waiting for the worker.
         sqlx::query(
@@ -437,6 +568,128 @@ impl PostService for PostServiceImpl {
         Ok(Response::new(GetPostResponse {
             post: Some(post_detail),
         }))
+    }
+
+    async fn add_post_to_portal(
+        &self,
+        request: Request<AddPostToPortalRequest>,
+    ) -> Result<Response<AddPostToPortalResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let post_id = PostId::parse(&req.post_id)
+            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let added_at = chrono::Utc::now();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Self::ensure_post_owned_by_user(&mut tx, post_id, auth.user_id).await?;
+
+        let (portal_id, portal_name) = Self::resolve_or_create_portal(
+            &mut tx,
+            auth.user_id,
+            &req.portal_id,
+            &req.portal_name,
+        )
+        .await?
+        .ok_or_else(|| Status::invalid_argument("portal_id or portal_name is required"))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO portal_posts (portal_id, post_id, added_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (portal_id, post_id) DO NOTHING
+            "#,
+        )
+        .bind(portal_id)
+        .bind(post_id.as_uuid())
+        .bind(added_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        sqlx::query("UPDATE portals SET updated_at = NOW() WHERE id = $1")
+            .bind(portal_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(AddPostToPortalResponse {
+            portal_id: portal_id.to_string(),
+            portal_name,
+        }))
+    }
+
+    async fn remove_post_from_portal(
+        &self,
+        request: Request<RemovePostFromPortalRequest>,
+    ) -> Result<Response<RemovePostFromPortalResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let post_id = PostId::parse(&req.post_id)
+            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let portal_id = uuid::Uuid::parse_str(req.portal_id.trim())
+            .map_err(|_| Status::invalid_argument("invalid portal_id"))?;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Self::ensure_post_owned_by_user(&mut tx, post_id, auth.user_id).await?;
+
+        let owns_portal = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM portals
+                WHERE id = $1 AND owner_id = $2
+            )
+            "#,
+        )
+        .bind(portal_id)
+        .bind(auth.user_id.as_uuid())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        if !owns_portal {
+            return Err(Status::not_found("portal not found"));
+        }
+
+        sqlx::query(
+            r#"
+            DELETE FROM portal_posts
+            WHERE portal_id = $1 AND post_id = $2
+            "#,
+        )
+        .bind(portal_id)
+        .bind(post_id.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        sqlx::query("UPDATE portals SET updated_at = NOW() WHERE id = $1")
+            .bind(portal_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(RemovePostFromPortalResponse {}))
     }
 
     async fn delete_post(

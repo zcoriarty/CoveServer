@@ -10,6 +10,8 @@ service PostService {
   rpc GetPost(GetPostRequest) returns (GetPostResponse);
   rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
   rpc EditCaption(EditCaptionRequest) returns (EditCaptionResponse);
+  rpc AddPostToPortal(AddPostToPortalRequest) returns (AddPostToPortalResponse);
+  rpc RemovePostFromPortal(RemovePostFromPortalRequest) returns (RemovePostFromPortalResponse);
 }
 
 message CreatePostRequest {
@@ -17,6 +19,8 @@ message CreatePostRequest {
   cove.common.Visibility visibility = 2;
   repeated string media_ids = 3;
   cove.common.Location location = 4;
+  string portal_id = 5;
+  string portal_name = 6;
 }
 
 message CreatePostResponse {
@@ -61,3 +65,21 @@ message EditCaptionRequest {
 message EditCaptionResponse {
   google.protobuf.Timestamp edited_at = 1;
 }
+
+message AddPostToPortalRequest {
+  string post_id = 1;
+  string portal_id = 2;
+  string portal_name = 3;
+}
+
+message AddPostToPortalResponse {
+  string portal_id = 1;
+  string portal_name = 2;
+}
+
+message RemovePostFromPortalRequest {
+  string post_id = 1;
+  string portal_id = 2;
+}
+
+message RemovePostFromPortalResponse {}

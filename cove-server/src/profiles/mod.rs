@@ -10,10 +10,12 @@ use cove_proto::cove::profile::{
     profile_service_server::ProfileService, GetProfileGridRequest, GetProfileGridResponse,
     GetProfilePortalsRequest, GetProfilePortalsResponse, GetProfileRequest, GetProfileResponse,
     GetPortalFeedRequest, GetPortalFeedResponse, PortalSummary, ProfileGridItem,
+    ReorderPortalsRequest, ReorderPortalsResponse, UpdatePortalRequest, UpdatePortalResponse,
     UpdateProfileRequest, UpdateProfileResponse,
 };
 use prost_types::Timestamp;
 use sqlx::{PgPool, Row};
+use std::collections::HashSet;
 use tonic::{Request, Response, Status};
 
 /// Profile service implementation.
@@ -29,6 +31,15 @@ impl ProfileServiceImpl {
 
     fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
+    }
+
+    fn normalize_portal_name(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        Some(trimmed.chars().take(60).collect())
     }
 
     async fn can_view_profile_posts(
@@ -525,7 +536,7 @@ impl ProfileService for ProfileServiceImpl {
                 LIMIT 1
             ) cover ON true
             WHERE po.owner_id = $1
-            ORDER BY po.updated_at DESC, po.id DESC
+            ORDER BY po.order_index ASC, po.updated_at DESC, po.id DESC
             "#,
         )
         .bind(target_id.as_uuid())
@@ -583,6 +594,140 @@ impl ProfileService for ProfileServiceImpl {
             .collect();
 
         Ok(Response::new(GetProfilePortalsResponse { portals, can_edit }))
+    }
+
+    async fn update_portal(
+        &self,
+        request: Request<UpdatePortalRequest>,
+    ) -> Result<Response<UpdatePortalResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        let portal_id = uuid::Uuid::parse_str(req.portal_id.trim())
+            .map_err(|_| Status::invalid_argument("invalid portal_id"))?;
+        let name = Self::normalize_portal_name(&req.name)
+            .ok_or_else(|| Status::invalid_argument("name is required"))?;
+
+        let row = sqlx::query(
+            r#"
+            UPDATE portals
+            SET name = $1, updated_at = NOW()
+            WHERE id = $2 AND owner_id = $3
+            RETURNING id, name, updated_at
+            "#,
+        )
+        .bind(&name)
+        .bind(portal_id)
+        .bind(auth.user_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await;
+
+        let row = match row {
+            Ok(Some(row)) => row,
+            Ok(None) => return Err(Status::not_found("portal not found")),
+            Err(sqlx::Error::Database(db_error))
+                if db_error.constraint() == Some("idx_portals_owner_name") =>
+            {
+                return Err(Status::already_exists("portal name already exists"));
+            }
+            Err(_) => return Err(Status::internal("database error")),
+        };
+
+        let updated_id: uuid::Uuid = row.get(0);
+        let updated_name: String = row.get(1);
+        let updated_at: chrono::DateTime<chrono::Utc> = row.get(2);
+
+        Ok(Response::new(UpdatePortalResponse {
+            portal_id: updated_id.to_string(),
+            name: updated_name,
+            updated_at: Some(Timestamp {
+                seconds: updated_at.timestamp(),
+                nanos: updated_at.timestamp_subsec_nanos() as i32,
+            }),
+        }))
+    }
+
+    async fn reorder_portals(
+        &self,
+        request: Request<ReorderPortalsRequest>,
+    ) -> Result<Response<ReorderPortalsResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let req = request.into_inner();
+
+        if req.portal_ids.is_empty() {
+            return Err(Status::invalid_argument("portal_ids is required"));
+        }
+
+        let mut ordered_portal_ids = Vec::with_capacity(req.portal_ids.len());
+        let mut requested_portal_ids = HashSet::with_capacity(req.portal_ids.len());
+        for raw_portal_id in &req.portal_ids {
+            let portal_id = uuid::Uuid::parse_str(raw_portal_id.trim())
+                .map_err(|_| Status::invalid_argument("invalid portal_id"))?;
+            if !requested_portal_ids.insert(portal_id) {
+                return Err(Status::invalid_argument(
+                    "portal_ids must not contain duplicates",
+                ));
+            }
+            ordered_portal_ids.push(portal_id);
+        }
+
+        let existing_rows = sqlx::query(
+            r#"
+            SELECT id
+            FROM portals
+            WHERE owner_id = $1
+            ORDER BY order_index ASC, updated_at DESC, id DESC
+            "#,
+        )
+        .bind(auth.user_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| Status::internal("database error"))?;
+
+        if existing_rows.len() != ordered_portal_ids.len() {
+            return Err(Status::invalid_argument(
+                "portal_ids must include every portal exactly once",
+            ));
+        }
+
+        let existing_portal_ids: HashSet<uuid::Uuid> = existing_rows
+            .into_iter()
+            .map(|row| row.get::<uuid::Uuid, _>(0))
+            .collect();
+
+        if existing_portal_ids != requested_portal_ids {
+            return Err(Status::invalid_argument(
+                "portal_ids must include every portal exactly once",
+            ));
+        }
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| Status::internal("database error"))?;
+
+        for (position, portal_id) in ordered_portal_ids.iter().enumerate() {
+            sqlx::query(
+                r#"
+                UPDATE portals
+                SET order_index = $1
+                WHERE id = $2 AND owner_id = $3
+                "#,
+            )
+            .bind(position as i32)
+            .bind(portal_id)
+            .bind(auth.user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|_| Status::internal("database error"))?;
+
+        Ok(Response::new(ReorderPortalsResponse {}))
     }
 
     async fn get_portal_feed(

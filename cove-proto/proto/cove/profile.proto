@@ -12,6 +12,8 @@ service ProfileService {
   rpc GetProfileGrid(GetProfileGridRequest) returns (GetProfileGridResponse);
   rpc GetProfilePortals(GetProfilePortalsRequest) returns (GetProfilePortalsResponse);
   rpc GetPortalFeed(GetPortalFeedRequest) returns (GetPortalFeedResponse);
+  rpc UpdatePortal(UpdatePortalRequest) returns (UpdatePortalResponse);
+  rpc ReorderPortals(ReorderPortalsRequest) returns (ReorderPortalsResponse);
 }
 
 message GetProfileRequest {
@@ -95,3 +97,20 @@ message PortalSummary {
   google.protobuf.Timestamp updated_at = 5;
   bool contains_post = 6;
 }
+
+message UpdatePortalRequest {
+  string portal_id = 1;
+  string name = 2;
+}
+
+message UpdatePortalResponse {
+  string portal_id = 1;
+  string name = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message ReorderPortalsRequest {
+  repeated string portal_ids = 1;
+}
+
+message ReorderPortalsResponse {}

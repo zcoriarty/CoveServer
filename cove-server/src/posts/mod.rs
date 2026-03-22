@@ -108,8 +108,18 @@ impl PostServiceImpl {
             let created_portal_id = uuid::Uuid::now_v7();
             let row = sqlx::query(
                 r#"
-                INSERT INTO portals (id, owner_id, name, created_at, updated_at)
-                VALUES ($1, $2, $3, NOW(), NOW())
+                INSERT INTO portals (id, owner_id, name, order_index, created_at, updated_at)
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    COALESCE(
+                        (SELECT MAX(order_index) + 1 FROM portals WHERE owner_id = $2),
+                        0
+                    ),
+                    NOW(),
+                    NOW()
+                )
                 ON CONFLICT (owner_id, lower(name))
                 DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()
                 RETURNING id, name

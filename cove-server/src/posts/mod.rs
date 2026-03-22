@@ -753,16 +753,65 @@ impl PostService for PostServiceImpl {
         let post_id = PostId::parse(&req.post_id)
             .map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
+        if req.clear_location && req.location.is_some() {
+            return Err(Status::invalid_argument(
+                "clear_location cannot be combined with location",
+            ));
+        }
+
+        let location_update = if let Some(location) = req.location.as_ref() {
+            if !location.latitude.is_finite()
+                || !location.longitude.is_finite()
+                || !(-90.0..=90.0).contains(&location.latitude)
+                || !(-180.0..=180.0).contains(&location.longitude)
+            {
+                return Err(Status::invalid_argument("invalid location coordinates"));
+            }
+
+            Some((
+                location.latitude,
+                location.longitude,
+                location.display_name.trim().to_string(),
+            ))
+        } else {
+            None
+        };
+        let replace_location = location_update.is_some();
+        let (location_lat, location_lng, location_name) = location_update
+            .map(|(lat, lng, name)| (Some(lat), Some(lng), Some(name)))
+            .unwrap_or((None, None, None));
+
         let edited_at = chrono::Utc::now();
 
         let result = sqlx::query(
             r#"
             UPDATE posts
-            SET caption = $1, edited_at = $2
-            WHERE id = $3 AND author_id = $4 AND NOT is_deleted
+            SET caption = $1,
+                location_lat = CASE
+                    WHEN $2 THEN NULL
+                    WHEN $3 THEN $4
+                    ELSE location_lat
+                END,
+                location_lng = CASE
+                    WHEN $2 THEN NULL
+                    WHEN $3 THEN $5
+                    ELSE location_lng
+                END,
+                location_name = CASE
+                    WHEN $2 THEN NULL
+                    WHEN $3 THEN $6
+                    ELSE location_name
+                END,
+                edited_at = $7
+            WHERE id = $8 AND author_id = $9 AND NOT is_deleted
             "#,
         )
         .bind(&req.caption)
+        .bind(req.clear_location)
+        .bind(replace_location)
+        .bind(location_lat)
+        .bind(location_lng)
+        .bind(location_name.as_deref())
         .bind(edited_at)
         .bind(post_id.as_uuid())
         .bind(auth.user_id.as_uuid())

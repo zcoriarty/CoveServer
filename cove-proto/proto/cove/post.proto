@@ -60,6 +60,8 @@ message DeletePostResponse {}
 message EditCaptionRequest {
   string post_id = 1;
   string caption = 2;
+  cove.common.Location location = 3;
+  bool clear_location = 4;
 }
 
 message EditCaptionResponse {

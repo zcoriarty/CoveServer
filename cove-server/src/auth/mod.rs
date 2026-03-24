@@ -531,6 +531,89 @@ impl AuthService for AuthServiceImpl {
         Ok(Response::new(LogoutResponse {}))
     }
 
+    async fn delete_account(
+        &self,
+        request: Request<()>,
+    ) -> Result<Response<()>, Status> {
+        let auth = self.auth(request.metadata())?;
+        let user_id = auth.user_id.as_uuid();
+
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            tracing::error!(error = %e, "begin transaction failed");
+            Status::internal("internal error")
+        })?;
+
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET invited_by = NULL
+            WHERE invited_by = $1
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "clear invited_by references failed");
+            Status::internal("internal error")
+        })?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM invites
+            WHERE created_by = $1
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "delete invites failed");
+            Status::internal("internal error")
+        })?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM audit_log
+            WHERE actor_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "delete audit log entries failed");
+            Status::internal("internal error")
+        })?;
+
+        let deleted = sqlx::query(
+            r#"
+            DELETE FROM users
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "delete user failed");
+            Status::internal("internal error")
+        })?;
+
+        if deleted.rows_affected() == 0 {
+            return Err(Status::not_found("user not found"));
+        }
+
+        tx.commit().await.map_err(|e| {
+            tracing::error!(error = %e, "commit failed");
+            Status::internal("internal error")
+        })?;
+
+        tracing::info!(user_id = %auth.user_id, "account deleted");
+
+        Ok(Response::new(()))
+    }
+
     async fn revoke_session(
         &self,
         request: Request<RevokeSessionRequest>,

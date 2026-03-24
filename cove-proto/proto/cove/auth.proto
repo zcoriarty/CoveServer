@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package cove.auth;
 
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 service AuthService {
@@ -9,6 +10,7 @@ service AuthService {
   rpc Login(LoginRequest) returns (LoginResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc DeleteAccount(google.protobuf.Empty) returns (google.protobuf.Empty);
   rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc ValidateInvite(ValidateInviteRequest) returns (ValidateInviteResponse);

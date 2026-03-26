@@ -3,8 +3,10 @@
 //! notification delivery, EXIF stripping, thumbnail generation, and search indexing.
 
 use cove_server::config::CoveConfig;
+use cove_server::push::PushService;
 use cove_server::storage::object_store::SupabaseStorageService;
 use sqlx::{postgres::PgPoolOptions, Row};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -27,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&config.database.url)
         .await
         .expect("failed to connect to PostgreSQL");
+    let push = Arc::new(PushService::new(pool.clone(), &config.push)?);
 
     let storage = SupabaseStorageService::new(
         config.storage.endpoint.clone(),
@@ -54,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let worker = Worker {
         pool,
         storage,
+        push,
     };
 
     tracing::info!("worker polling started");
@@ -65,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Worker {
     pool: sqlx::PgPool,
     storage: SupabaseStorageService,
+    push: Arc<PushService>,
 }
 
 impl Worker {
@@ -116,7 +121,9 @@ impl Worker {
                 "media_processing" => {
                     handlers::handle_media_processing(&self.pool, &self.storage, &payload).await
                 }
-                "notification" => handlers::handle_notification(&self.pool, &payload).await,
+                "notification" => {
+                    handlers::handle_notification(&self.pool, self.push.as_ref(), &payload).await
+                }
                 other => {
                     tracing::warn!(job_type = other, "unknown job type");
                     Ok(())

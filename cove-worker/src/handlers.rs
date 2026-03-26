@@ -1,5 +1,7 @@
 //! Job handler implementations for the background worker.
 
+use cove_common::id::UserId;
+use cove_server::push::PushService;
 use cove_server::storage::object_store::SupabaseStorageService;
 use exif::{In, Reader as ExifReader, Tag};
 use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageReader};
@@ -265,7 +267,11 @@ async fn process_video(pool: &PgPool, media_uuid: Uuid, video_data: &[u8]) -> Jo
 }
 
 /// Notification job handler: creates a notification record from the job payload.
-pub async fn handle_notification(pool: &PgPool, payload: &serde_json::Value) -> JobResult {
+pub async fn handle_notification(
+    pool: &PgPool,
+    push: &PushService,
+    payload: &serde_json::Value,
+) -> JobResult {
     let recipient_id = payload["recipient_id"]
         .as_str()
         .ok_or("missing recipient_id")?;
@@ -304,6 +310,22 @@ pub async fn handle_notification(pool: &PgPool, payload: &serde_json::Value) -> 
         notification_type = notification_type,
         "notification created"
     );
+
+    if let Err(error) = push
+        .send_notification_push(
+            UserId::from_uuid(recipient_uuid),
+            UserId::from_uuid(actor_uuid),
+            notification_type,
+        )
+        .await
+    {
+        tracing::warn!(
+            recipient = recipient_id,
+            notification_type = notification_type,
+            error = %error,
+            "failed to send APNs push for notification"
+        );
+    }
 
     Ok(())
 }

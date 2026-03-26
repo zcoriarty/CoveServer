@@ -121,7 +121,7 @@ impl PushService {
         recipient_id: UserId,
         actor_id: UserId,
     ) -> Result<()> {
-        self.send_follow_push(
+        self.send_templated_push(
             recipient_id,
             actor_id,
             "New follow request",
@@ -136,7 +136,7 @@ impl PushService {
         recipient_id: UserId,
         actor_id: UserId,
     ) -> Result<()> {
-        self.send_follow_push(
+        self.send_templated_push(
             recipient_id,
             actor_id,
             "Follow request accepted",
@@ -146,7 +146,70 @@ impl PushService {
         .await
     }
 
-    async fn send_follow_push(
+    pub async fn send_notification_push(
+        &self,
+        recipient_id: UserId,
+        actor_id: UserId,
+        notification_type: &str,
+    ) -> Result<()> {
+        match notification_type {
+            "follow_request" => self.send_follow_request_push(recipient_id, actor_id).await,
+            "follow_accepted" => self.send_follow_accepted_push(recipient_id, actor_id).await,
+            "new_follower" => {
+                self.send_templated_push(
+                    recipient_id,
+                    actor_id,
+                    "New follower",
+                    "{actor} started following you",
+                    "new_follower",
+                )
+                .await
+            }
+            "like" => {
+                self.send_templated_push(
+                    recipient_id,
+                    actor_id,
+                    "New like",
+                    "{actor} liked your post",
+                    "like",
+                )
+                .await
+            }
+            "comment" => {
+                self.send_templated_push(
+                    recipient_id,
+                    actor_id,
+                    "New comment",
+                    "{actor} commented on your post",
+                    "comment",
+                )
+                .await
+            }
+            "share" => {
+                self.send_templated_push(
+                    recipient_id,
+                    actor_id,
+                    "Post shared",
+                    "{actor} shared a post with you",
+                    "share",
+                )
+                .await
+            }
+            "new_post" => {
+                self.send_templated_push(
+                    recipient_id,
+                    actor_id,
+                    "New post",
+                    "{actor} shared a new post",
+                    "new_post",
+                )
+                .await
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn send_templated_push(
         &self,
         recipient_id: UserId,
         actor_id: UserId,
@@ -154,20 +217,32 @@ impl PushService {
         body_template: &str,
         event_type: &str,
     ) -> Result<()> {
-        let Some(apns) = self.apns.as_ref() else {
-            return Ok(());
-        };
+        let actor_name = self.load_actor_name(actor_id).await?;
+        let body = body_template.replace("{actor}", &actor_name);
+        self.send_push(recipient_id, title, &body, event_type).await
+    }
 
-        let actor_name = sqlx::query_scalar::<_, String>(
+    async fn load_actor_name(&self, actor_id: UserId) -> Result<String> {
+        Ok(sqlx::query_scalar::<_, String>(
             "SELECT COALESCE(NULLIF(display_name, ''), username) FROM users WHERE id = $1",
         )
         .bind(actor_id.as_uuid())
         .fetch_optional(&self.pool)
         .await
         .context("failed to load actor name for push")?
-        .unwrap_or_else(|| "Someone".to_string());
+        .unwrap_or_else(|| "Someone".to_string()))
+    }
 
-        let body = body_template.replace("{actor}", &actor_name);
+    async fn send_push(
+        &self,
+        recipient_id: UserId,
+        title: &str,
+        body: &str,
+        event_type: &str,
+    ) -> Result<()> {
+        let Some(apns) = self.apns.as_ref() else {
+            return Ok(());
+        };
 
         let tokens = sqlx::query_as::<_, (String, String)>(
             r#"
@@ -182,6 +257,15 @@ impl PushService {
         .fetch_all(&self.pool)
         .await
         .context("failed to load recipient push tokens")?;
+
+        if tokens.is_empty() {
+            tracing::info!(
+                recipient_id = %recipient_id,
+                event_type = event_type,
+                "skipping APNs push: no active tokens"
+            );
+            return Ok(());
+        }
 
         for (token, environment_str) in tokens {
             let environment =

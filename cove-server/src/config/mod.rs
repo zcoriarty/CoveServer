@@ -212,6 +212,44 @@ impl CoveConfig {
                 }
             }
         }
+
+        if let Some(raw_enabled) =
+            first_non_empty_env(&["COVE_PUSH__ENABLED", "COVE__PUSH__ENABLED"])
+        {
+            if let Some(enabled) = parse_bool_env(&raw_enabled) {
+                parsed.push.enabled = enabled;
+            } else {
+                tracing::warn!(
+                    raw_value = %raw_enabled,
+                    "invalid value for push.enabled env override; expected true/false"
+                );
+            }
+        }
+
+        if let Some(value) = first_non_empty_env(&["COVE_PUSH__APNS_KEY_ID", "COVE__PUSH__APNS_KEY_ID"]) {
+            parsed.push.apns_key_id = value;
+        }
+        if let Some(value) = first_non_empty_env(&["COVE_PUSH__APNS_TEAM_ID", "COVE__PUSH__APNS_TEAM_ID"]) {
+            parsed.push.apns_team_id = value;
+        }
+        if let Some(value) =
+            first_non_empty_env(&["COVE_PUSH__APNS_BUNDLE_ID", "COVE__PUSH__APNS_BUNDLE_ID"])
+        {
+            parsed.push.apns_bundle_id = value;
+        }
+        if let Some(value) = first_non_empty_env(&[
+            "COVE_PUSH__APNS_PRIVATE_KEY_PATH",
+            "COVE__PUSH__APNS_PRIVATE_KEY_PATH",
+        ]) {
+            parsed.push.apns_private_key_path = PathBuf::from(value);
+        }
+        if let Some(value) = first_non_empty_env(&[
+            "COVE_PUSH__DEFAULT_ENVIRONMENT",
+            "COVE__PUSH__DEFAULT_ENVIRONMENT",
+        ]) {
+            parsed.push.default_environment = value;
+        }
+
         parsed.validate()?;
         Ok(parsed)
     }
@@ -268,4 +306,12 @@ fn first_non_empty_env(keys: &[&str]) -> Option<String> {
         Ok(value) if !value.trim().is_empty() => Some(value),
         _ => None,
     })
+}
+
+fn parse_bool_env(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }

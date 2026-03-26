@@ -248,7 +248,7 @@ async fn process_video(pool: &PgPool, media_uuid: Uuid, video_data: &[u8]) -> Jo
     sqlx::query(
         r#"
         UPDATE media_items
-        SET file_size_bytes = $1, width = 1920, height = 1080, aspect_ratio = 1.78
+        SET file_size_bytes = $1, width = 1080, height = 1080, aspect_ratio = 1.0
         WHERE id = $2
         "#,
     )
@@ -257,7 +257,10 @@ async fn process_video(pool: &PgPool, media_uuid: Uuid, video_data: &[u8]) -> Jo
     .execute(pool)
     .await?;
 
-    tracing::info!(media_id = %media_uuid, "video processed (metadata only for v1)");
+    tracing::info!(
+        media_id = %media_uuid,
+        "video processed (placeholder square metadata until full probe is added)"
+    );
     Ok(())
 }
 

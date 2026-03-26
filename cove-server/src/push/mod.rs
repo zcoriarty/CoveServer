@@ -30,30 +30,24 @@ pub struct PushService {
 }
 
 impl PushService {
-    pub fn new(pool: PgPool, config: &PushConfig) -> Self {
+    pub fn new(pool: PgPool, config: &PushConfig) -> Result<Self> {
         let default_environment = PushEnvironment::parse(&config.default_environment)
             .unwrap_or(PushEnvironment::Development);
 
         let apns = if config.enabled {
-            match ApnsClient::from_config(config) {
-                Ok(client) => Some(Arc::new(client)),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "push delivery disabled: failed to initialize APNs client"
-                    );
-                    None
-                }
-            }
+            Some(Arc::new(
+                ApnsClient::from_config(config)
+                    .context("failed to initialize APNs client while push.enabled=true")?,
+            ))
         } else {
             None
         };
 
-        Self {
+        Ok(Self {
             pool,
             apns,
             default_environment,
-        }
+        })
     }
 
     /// Reads push registration hints from gRPC metadata and upserts/revokes tokens.

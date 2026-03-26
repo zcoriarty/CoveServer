@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- gRPC Service Impls ---
     let jwt_secret = config.auth.jwt_secret.clone();
-    let push_service = Arc::new(PushService::new(pool.clone(), &config.push));
+    let push_service = Arc::new(PushService::new(pool.clone(), &config.push)?);
 
     let auth_svc = AuthServiceImpl::new(
         pool.clone(),

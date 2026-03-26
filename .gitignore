@@ -15,7 +15,11 @@ mutants.out.old/
 # Secrets (NEVER commit these)
 secrets/master.key
 secrets/*.key
+secrets/*.json
 .env
+
+# scripts
+scripts/*.sh
 
 # OS
 .DS_Store

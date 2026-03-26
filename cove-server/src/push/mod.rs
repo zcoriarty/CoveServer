@@ -35,11 +35,16 @@ impl PushService {
             .unwrap_or(PushEnvironment::Development);
 
         let apns = if config.enabled {
-            Some(Arc::new(
-                ApnsClient::from_config(config)
-                    .context("failed to initialize APNs client while push.enabled=true")?,
-            ))
+            let client = ApnsClient::from_config(config)
+                .context("failed to initialize APNs client while push.enabled=true")?;
+            tracing::info!(
+                apns_topic = %config.apns_bundle_id,
+                default_environment = %default_environment.as_str(),
+                "push delivery enabled"
+            );
+            Some(Arc::new(client))
         } else {
+            tracing::warn!("push delivery disabled: push.enabled=false");
             None
         };
 

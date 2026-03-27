@@ -25,6 +25,8 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/cove-worker:${SHORT_SHA}
       - --command=cove-worker
       - --scaling=${_SCALING}
+      - --update-secrets=COVE_PUSH__APNS_PRIVATE_KEY=${_APNS_SECRET}:latest
+      - --update-env-vars=COVE_PUSH__APNS_PRIVATE_KEY_PATH=/tmp/secrets/AuthKey.p8
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/cove-worker:${SHORT_SHA}
@@ -34,6 +36,7 @@ substitutions:
   _AR_REPO: cove
   _WORKER_POOL: cove-worker
   _SCALING: "1"
+  _APNS_SECRET: cove-apns-authkey
 
 options:
   logging: CLOUD_LOGGING_ONLY

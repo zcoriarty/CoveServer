@@ -63,6 +63,7 @@ pub struct PushConfig {
     pub apns_key_id: String,
     pub apns_team_id: String,
     pub apns_bundle_id: String,
+    pub apns_private_key: String,
     pub apns_private_key_path: PathBuf,
     pub default_environment: String,
 }
@@ -136,6 +137,7 @@ impl Default for PushConfig {
             apns_key_id: String::new(),
             apns_team_id: String::new(),
             apns_bundle_id: String::new(),
+            apns_private_key: String::new(),
             apns_private_key_path: PathBuf::from("./secrets/AuthKey.p8"),
             default_environment: "development".to_string(),
         }
@@ -189,6 +191,7 @@ impl CoveConfig {
             .set_default("push.apns_key_id", "")?
             .set_default("push.apns_team_id", "")?
             .set_default("push.apns_bundle_id", "")?
+            .set_default("push.apns_private_key", "")?
             .set_default("push.apns_private_key_path", "./secrets/AuthKey.p8")?
             .set_default("push.default_environment", "development")?
             .add_source(config::File::with_name("config/cove").required(false))
@@ -236,6 +239,11 @@ impl CoveConfig {
             first_non_empty_env(&["COVE_PUSH__APNS_BUNDLE_ID", "COVE__PUSH__APNS_BUNDLE_ID"])
         {
             parsed.push.apns_bundle_id = value;
+        }
+        if let Some(value) =
+            first_non_empty_env(&["COVE_PUSH__APNS_PRIVATE_KEY", "COVE__PUSH__APNS_PRIVATE_KEY"])
+        {
+            parsed.push.apns_private_key = value;
         }
         if let Some(value) = first_non_empty_env(&[
             "COVE_PUSH__APNS_PRIVATE_KEY_PATH",

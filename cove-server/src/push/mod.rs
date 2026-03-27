@@ -375,15 +375,31 @@ impl ApnsClient {
             ));
         }
 
-        let private_key_bytes =
+        let use_inline_key = !config.apns_private_key.trim().is_empty();
+        let private_key_bytes = if use_inline_key {
+            let raw = config.apns_private_key.as_str();
+            let normalized = if raw.contains("\\n") && !raw.contains('\n') {
+                raw.replace("\\n", "\n")
+            } else {
+                raw.to_string()
+            };
+            normalized.into_bytes()
+        } else {
             std::fs::read(&config.apns_private_key_path).with_context(|| {
                 format!(
                     "failed to read APNs private key: {}",
                     config.apns_private_key_path.display()
                 )
-            })?;
+            })?
+        };
         let encoding_key = EncodingKey::from_ec_pem(&private_key_bytes)
-            .context("failed to parse APNs private key (expected .p8 EC key)")?;
+            .with_context(|| {
+                if use_inline_key {
+                    "failed to parse APNs private key from push.apns_private_key (expected .p8 EC key)"
+                } else {
+                    "failed to parse APNs private key (expected .p8 EC key)"
+                }
+            })?;
 
         let client = Client::builder()
             .use_rustls_tls()

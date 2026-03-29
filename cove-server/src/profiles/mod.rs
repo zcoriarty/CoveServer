@@ -401,6 +401,7 @@ impl ProfileService for ProfileServiceImpl {
 
                 let media_type = match first_media_type.as_deref() {
                     Some("video") => MediaType::Video as i32,
+                    Some("audio") => MediaType::Audio as i32,
                     _ => MediaType::Photo as i32,
                 };
 
@@ -564,6 +565,7 @@ impl ProfileService for ProfileServiceImpl {
                 let cover = cover_media_id.map(|media_id| {
                     let media_type = match cover_media_type.as_deref() {
                         Some("video") => MediaType::Video as i32,
+                        Some("audio") => MediaType::Audio as i32,
                         _ => MediaType::Photo as i32,
                     };
 
@@ -804,6 +806,7 @@ impl ProfileService for ProfileServiceImpl {
             let cover = cover_media_id.map(|media_id| {
                 let media_type = match cover_media_type.as_deref() {
                     Some("video") => MediaType::Video as i32,
+                    Some("audio") => MediaType::Audio as i32,
                     _ => MediaType::Photo as i32,
                 };
 

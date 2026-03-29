@@ -120,6 +120,7 @@ impl FeedServiceImpl {
                 media_type: match mt.as_str() {
                     "photo" => MediaType::Photo as i32,
                     "video" => MediaType::Video as i32,
+                    "audio" => MediaType::Audio as i32,
                     _ => MediaType::Unspecified as i32,
                 },
                 url: String::new(),

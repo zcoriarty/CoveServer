@@ -15,9 +15,22 @@ use tonic::{Request, Response, Status, Streaming};
 const ALLOWED_IMAGE_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 const ALLOWED_VIDEO_TYPES: &[&str] = &["video/mp4", "video/quicktime"];
+const ALLOWED_AUDIO_TYPES: &[&str] = &[
+    "audio/m4a",
+    "audio/x-m4a",
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/vnd.wave",
+    "audio/aac",
+    "audio/x-aac",
+    "audio/x-caf",
+];
 
 const MAX_IMAGE_SIZE_BYTES: i64 = 20 * 1024 * 1024; // 20 MB
 const MAX_VIDEO_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
+const MAX_AUDIO_SIZE_BYTES: i64 = 30 * 1024 * 1024; // 30 MB
 
 const DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024; // 64 KB
 
@@ -52,6 +65,7 @@ impl MediaServiceImpl {
         let (allowed_types, max_size) = match media_type {
             1 => (ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_BYTES),
             2 => (ALLOWED_VIDEO_TYPES, MAX_VIDEO_SIZE_BYTES),
+            3 => (ALLOWED_AUDIO_TYPES, MAX_AUDIO_SIZE_BYTES),
             _ => return Err(Status::invalid_argument("unsupported media type")),
         };
 
@@ -81,6 +95,7 @@ impl MediaServiceImpl {
         match media_type {
             1 => "photo",
             2 => "video",
+            3 => "audio",
             _ => "photo",
         }
     }
@@ -124,12 +139,24 @@ impl MediaService for MediaServiceImpl {
             .to_lowercase();
         let sanitized_ext = if matches!(
             ext.as_str(),
-            "jpg" | "jpeg" | "png" | "gif" | "webp" | "mp4" | "mov"
+            "jpg"
+                | "jpeg"
+                | "png"
+                | "gif"
+                | "webp"
+                | "mp4"
+                | "mov"
+                | "m4a"
+                | "aac"
+                | "mp3"
+                | "wav"
+                | "caf"
         ) {
             ext
         } else {
             match metadata.media_type {
                 2 => "mp4".to_string(),
+                3 => "m4a".to_string(),
                 _ => "jpg".to_string(),
             }
         };

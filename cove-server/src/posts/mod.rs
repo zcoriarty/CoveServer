@@ -264,6 +264,7 @@ fn media_type_from_str(s: &str) -> i32 {
     match s {
         "photo" => MediaType::Photo as i32,
         "video" => MediaType::Video as i32,
+        "audio" => MediaType::Audio as i32,
         _ => MediaType::Unspecified as i32,
     }
 }
@@ -333,6 +334,7 @@ impl PostService for PostServiceImpl {
 
             match media_type.as_deref() {
                 Some("video") => "video",
+                Some("audio") => "audio",
                 Some(_) => "photo",
                 None => {
                     return Err(Status::invalid_argument(format!(

@@ -128,6 +128,8 @@ pub async fn handle_media_processing(
         process_image(pool, storage, media_uuid, &original_key, &body).await?;
     } else if media_type == "video" {
         process_video(pool, media_uuid, &body).await?;
+    } else if media_type == "audio" {
+        process_audio(pool, media_uuid, &body).await?;
     }
 
     sqlx::query("UPDATE media_items SET processing_state = 'completed' WHERE id = $1")
@@ -262,6 +264,26 @@ async fn process_video(pool: &PgPool, media_uuid: Uuid, video_data: &[u8]) -> Jo
     tracing::info!(
         media_id = %media_uuid,
         "video processed (placeholder square metadata until full probe is added)"
+    );
+    Ok(())
+}
+
+async fn process_audio(pool: &PgPool, media_uuid: Uuid, audio_data: &[u8]) -> JobResult {
+    sqlx::query(
+        r#"
+        UPDATE media_items
+        SET file_size_bytes = $1, width = 1080, height = 1080, aspect_ratio = 1.0
+        WHERE id = $2
+        "#,
+    )
+    .bind(audio_data.len() as i64)
+    .bind(media_uuid)
+    .execute(pool)
+    .await?;
+
+    tracing::info!(
+        media_id = %media_uuid,
+        "audio processed (square placeholder metadata)"
     );
     Ok(())
 }

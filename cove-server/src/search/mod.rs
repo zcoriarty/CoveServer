@@ -339,6 +339,7 @@ impl SearchService for SearchServiceImpl {
                     .as_deref()
                     .map(|t| match t {
                         "video" => MediaType::Video as i32,
+                        "audio" => MediaType::Audio as i32,
                         _ => MediaType::Photo as i32,
                     })
                     .unwrap_or(MediaType::Unspecified as i32);

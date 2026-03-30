@@ -39,14 +39,29 @@ impl CommentServiceImpl {
         notification_type: &str,
         target_id: Option<Uuid>,
         message: &str,
+        push_type: Option<&str>,
+        push_title: Option<&str>,
+        push_body: Option<&str>,
     ) -> CoveResult<()> {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "recipient_id": recipient_id.to_string(),
             "actor_id": actor_id.to_string(),
             "notification_type": notification_type,
             "target_id": target_id.map(|u| u.to_string()),
             "message": message
         });
+
+        if let Some(push_type) = push_type {
+            payload["push_type"] = serde_json::Value::String(push_type.to_string());
+        }
+
+        if let Some(push_title) = push_title {
+            payload["push_title"] = serde_json::Value::String(push_title.to_string());
+        }
+
+        if let Some(push_body) = push_body {
+            payload["push_body"] = serde_json::Value::String(push_body.to_string());
+        }
 
         sqlx::query(
             r#"
@@ -88,25 +103,32 @@ impl CommentService for CommentServiceImpl {
             return Err(Status::permission_denied("cannot view post"));
         }
 
-        let parent_id: Option<Uuid> = req
-            .parent_comment_id
-            .as_ref()
-            .and_then(|s| Uuid::parse_str(s).ok());
+        let parent_id: Option<Uuid> = match req.parent_comment_id.as_ref() {
+            Some(parent_comment_id) => Some(
+                Uuid::parse_str(parent_comment_id)
+                    .map_err(|_| Status::invalid_argument("invalid parent_comment_id"))?,
+            ),
+            None => None,
+        };
 
-        if let Some(pid) = parent_id {
-            let parent_exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1 AND post_id = $2 AND NOT is_deleted)",
+        let parent_author_id: Option<Uuid> = if let Some(pid) = parent_id {
+            let parent_author_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT author_id FROM comments WHERE id = $1 AND post_id = $2 AND NOT is_deleted",
             )
             .bind(pid)
             .bind(post_id.as_uuid())
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await
-            .map_err(|e| Status::internal("database error"))?;
+            .map_err(|_| Status::internal("database error"))?;
 
-            if !parent_exists {
+            if parent_author_id.is_none() {
                 return Err(Status::invalid_argument("parent comment not found"));
             }
-        }
+
+            parent_author_id
+        } else {
+            None
+        };
 
         let comment_id = CommentId::new();
         let now = chrono::Utc::now();
@@ -156,6 +178,7 @@ impl CommentService for CommentServiceImpl {
 
         let mentioned_usernames = mentions::extract_mentioned_usernames(body);
         let mut post_author_was_mentioned = false;
+        let mut parent_author_was_mentioned = false;
         if !mentioned_usernames.is_empty() {
             let mentioned_user_ids = mentions::resolve_mentionable_user_ids(
                 &self.pool,
@@ -167,6 +190,11 @@ impl CommentService for CommentServiceImpl {
             post_author_was_mentioned = mentioned_user_ids
                 .iter()
                 .any(|mentioned_user_id| *mentioned_user_id == post_author_id);
+            if let Some(parent_author_id) = parent_author_id {
+                parent_author_was_mentioned = mentioned_user_ids
+                    .iter()
+                    .any(|mentioned_user_id| *mentioned_user_id == parent_author_id);
+            }
 
             for mentioned_user_id in mentioned_user_ids {
                 sqlx::query(
@@ -219,16 +247,41 @@ impl CommentService for CommentServiceImpl {
             .await
             .map_err(|_| Status::internal("database error"))?;
 
-        if post_author_id != *auth.user_id.as_uuid() && !post_author_was_mentioned {
+        let replied_to_post_author = parent_author_id.is_some_and(|id| id == post_author_id);
+
+        if post_author_id != *auth.user_id.as_uuid()
+            && !post_author_was_mentioned
+            && !replied_to_post_author
+        {
             let _ = Self::enqueue_notification_job(
                 &self.pool,
                 UserId::from_uuid(post_author_id),
                 auth.user_id,
                 "comment",
                 Some(post_id.into_uuid()),
-                &format!("{} commented on your post", auth.user_id),
+                "commented on your post",
+                None,
+                None,
+                None,
             )
             .await;
+        }
+
+        if let Some(parent_author_id) = parent_author_id {
+            if parent_author_id != *auth.user_id.as_uuid() && !parent_author_was_mentioned {
+                let _ = Self::enqueue_notification_job(
+                    &self.pool,
+                    UserId::from_uuid(parent_author_id),
+                    auth.user_id,
+                    "comment",
+                    Some(post_id.into_uuid()),
+                    "replied to your comment",
+                    Some("comment"),
+                    Some("New reply"),
+                    Some("{actor} replied to your comment"),
+                )
+                .await;
+            }
         }
 
         Ok(Response::new(AddCommentResponse {

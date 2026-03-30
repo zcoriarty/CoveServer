@@ -155,6 +155,7 @@ impl CommentService for CommentServiceImpl {
                 .map_err(|_| Status::internal("database error"))?;
 
         let mentioned_usernames = mentions::extract_mentioned_usernames(body);
+        let mut post_author_was_mentioned = false;
         if !mentioned_usernames.is_empty() {
             let mentioned_user_ids = mentions::resolve_mentionable_user_ids(
                 &self.pool,
@@ -163,6 +164,9 @@ impl CommentService for CommentServiceImpl {
             )
             .await
             .map_err(|_| Status::internal("database error"))?;
+            post_author_was_mentioned = mentioned_user_ids
+                .iter()
+                .any(|mentioned_user_id| *mentioned_user_id == post_author_id);
 
             for mentioned_user_id in mentioned_user_ids {
                 sqlx::query(
@@ -186,10 +190,6 @@ impl CommentService for CommentServiceImpl {
                 .execute(&mut *tx)
                 .await
                 .map_err(|_| Status::internal("database error"))?;
-
-                if mentioned_user_id == post_author_id {
-                    continue;
-                }
 
                 let mention_notification_payload = serde_json::json!({
                     "recipient_id": mentioned_user_id.to_string(),
@@ -219,7 +219,7 @@ impl CommentService for CommentServiceImpl {
             .await
             .map_err(|_| Status::internal("database error"))?;
 
-        if post_author_id != *auth.user_id.as_uuid() {
+        if post_author_id != *auth.user_id.as_uuid() && !post_author_was_mentioned {
             let _ = Self::enqueue_notification_job(
                 &self.pool,
                 UserId::from_uuid(post_author_id),

@@ -45,6 +45,7 @@ impl NotificationServiceImpl {
             "follow_accepted" => NotificationType::FollowAccepted as i32,
             "new_follower" => NotificationType::NewFollower as i32,
             "like" => NotificationType::Like as i32,
+            "mention" => NotificationType::Comment as i32,
             "comment" => NotificationType::Comment as i32,
             "share" => NotificationType::Share as i32,
             "new_post" => NotificationType::NewPost as i32,

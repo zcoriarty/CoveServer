@@ -303,6 +303,12 @@ pub async fn handle_notification(
     let push_type = payload["push_type"].as_str();
     let push_title = payload["push_title"].as_str();
     let push_body = payload["push_body"].as_str();
+    let normalized_notification_type = if notification_type == "comment" && push_type == Some("mention")
+    {
+        "mention"
+    } else {
+        notification_type
+    };
 
     let recipient_uuid = Uuid::parse_str(recipient_id)?;
     let actor_uuid = Uuid::parse_str(actor_id)?;
@@ -321,7 +327,7 @@ pub async fn handle_notification(
     .bind(Uuid::now_v7())
     .bind(recipient_uuid)
     .bind(actor_uuid)
-    .bind(notification_type)
+    .bind(normalized_notification_type)
     .bind(target_uuid)
     .bind(message)
     .execute(pool)
@@ -329,7 +335,7 @@ pub async fn handle_notification(
 
     tracing::info!(
         recipient = recipient_id,
-        notification_type = notification_type,
+        notification_type = normalized_notification_type,
         "notification created"
     );
 
@@ -337,7 +343,7 @@ pub async fn handle_notification(
         .send_notification_push(
             UserId::from_uuid(recipient_uuid),
             UserId::from_uuid(actor_uuid),
-            notification_type,
+            normalized_notification_type,
             target_uuid,
             push_type,
             push_title,
@@ -347,7 +353,7 @@ pub async fn handle_notification(
     {
         tracing::warn!(
             recipient = recipient_id,
-            notification_type = notification_type,
+            notification_type = normalized_notification_type,
             error = %error,
             "failed to send APNs push for notification"
         );

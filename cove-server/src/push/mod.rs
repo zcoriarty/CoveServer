@@ -205,6 +205,7 @@ impl PushService {
             "new_follower" => Some(("New follower", "{actor} started following you")),
             "like" => Some(("New like", "{actor} liked your post")),
             "comment" => Some(("New comment", "{actor} commented on your post")),
+            "mention" => Some(("You were tagged", "{actor} tagged you")),
             "share" => Some(("Post shared", "{actor} shared a post with you")),
             "new_post" => Some(("New post", "{actor} shared a new post")),
             _ => None,

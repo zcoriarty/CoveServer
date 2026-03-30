@@ -194,7 +194,7 @@ impl CommentService for CommentServiceImpl {
                 let mention_notification_payload = serde_json::json!({
                     "recipient_id": mentioned_user_id.to_string(),
                     "actor_id": auth.user_id.to_string(),
-                    "notification_type": "comment",
+                    "notification_type": "mention",
                     "target_id": post_id.to_string(),
                     "message": "tagged you in a comment",
                     "push_type": "mention",

@@ -25,7 +25,10 @@ impl FeedServiceImpl {
         Self { pool, jwt_secret }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 
@@ -82,13 +85,16 @@ impl FeedServiceImpl {
                 let avatar_url = avatar_media_id
                     .map(|media_id| format!("/media/{}", media_id))
                     .unwrap_or_default();
-                m.insert(id, UserSummary {
-                    user_id: id.to_string(),
-                    username,
-                    display_name,
-                    avatar_url,
-                    is_following: false,
-                });
+                m.insert(
+                    id,
+                    UserSummary {
+                        user_id: id.to_string(),
+                        username,
+                        display_name,
+                        avatar_url,
+                        is_following: false,
+                    },
+                );
             }
             m
         };
@@ -144,8 +150,7 @@ impl FeedServiceImpl {
         .await
         .map_err(|e| CoveError::Database(e.to_string()))?;
 
-        let liked_set: std::collections::HashSet<uuid::Uuid> =
-            liked_post_ids.into_iter().collect();
+        let liked_set: std::collections::HashSet<uuid::Uuid> = liked_post_ids.into_iter().collect();
 
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
@@ -160,10 +165,7 @@ impl FeedServiceImpl {
                     is_following: false,
                 });
 
-            let media_refs = media_by_post
-                .get(&row.post_id)
-                .cloned()
-                .unwrap_or_default();
+            let media_refs = media_by_post.get(&row.post_id).cloned().unwrap_or_default();
 
             let visibility_proto = match row.visibility.as_str() {
                 "followers" => Visibility::Followers as i32,
@@ -282,9 +284,7 @@ impl FeedService for FeedServiceImpl {
 
         let pagination = req.pagination.as_ref();
         let page_size = pagination.map(|p| p.page_size).unwrap_or(20).clamp(1, 50);
-        let cursor_str = pagination
-            .map(|p| p.cursor.as_str())
-            .unwrap_or("");
+        let cursor_str = pagination.map(|p| p.cursor.as_str()).unwrap_or("");
 
         let params = PaginationParams::from_proto(page_size, cursor_str);
         // Caching is disabled: always query Postgres for fresh data.

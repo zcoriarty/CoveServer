@@ -169,8 +169,10 @@ impl NotificationService for NotificationServiceImpl {
                     acc
                 });
 
-        let mut actor_map: std::collections::HashMap<uuid::Uuid, (String, String, Option<uuid::Uuid>)> =
-            std::collections::HashMap::new();
+        let mut actor_map: std::collections::HashMap<
+            uuid::Uuid,
+            (String, String, Option<uuid::Uuid>),
+        > = std::collections::HashMap::new();
 
         for aid in &actor_ids {
             if let Ok(row) = sqlx::query_as::<_, (String, String, Option<uuid::Uuid>)>(

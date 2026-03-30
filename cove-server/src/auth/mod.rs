@@ -16,8 +16,8 @@ use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
-use tonic::{Request, Response, Status};
 use tonic::metadata::MetadataMap;
+use tonic::{Request, Response, Status};
 
 /// JWT claims for access token validation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,7 +147,8 @@ impl AuthService for AuthServiceImpl {
                     Status::internal("internal error")
                 })?;
 
-                let invite = invite_row.ok_or_else(|| Status::invalid_argument("invalid invite code"))?;
+                let invite =
+                    invite_row.ok_or_else(|| Status::invalid_argument("invalid invite code"))?;
                 let invite_id: uuid::Uuid = invite.get(0);
                 let created_by: uuid::Uuid = invite.get(1);
                 let max_uses: i32 = invite.get(2);
@@ -168,8 +169,7 @@ impl AuthService for AuthServiceImpl {
                 }
 
                 (Some(invite_id), Some(created_by))
-            }
-        ;
+            };
 
         // Check username uniqueness
         let username_taken = sqlx::query_scalar::<_, bool>(
@@ -188,28 +188,24 @@ impl AuthService for AuthServiceImpl {
         }
 
         // Check email uniqueness
-        let email_taken = sqlx::query_scalar::<_, bool>(
-            r#"SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)"#,
-        )
-        .bind(&req.email)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "database error");
-            Status::internal("internal error")
-        })?;
+        let email_taken =
+            sqlx::query_scalar::<_, bool>(r#"SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)"#)
+                .bind(&req.email)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "database error");
+                    Status::internal("internal error")
+                })?;
 
         if email_taken {
             return Err(Status::already_exists("email already taken"));
         }
 
-        let password_hash = self
-            .password_hasher
-            .hash(&req.password)
-            .map_err(|e| {
-                tracing::error!(error = %e, "password hash failed");
-                Status::internal("internal error")
-            })?;
+        let password_hash = self.password_hasher.hash(&req.password).map_err(|e| {
+            tracing::error!(error = %e, "password hash failed");
+            Status::internal("internal error")
+        })?;
 
         let user_id = UserId::new();
         let session_id = SessionId::new();
@@ -332,7 +328,9 @@ impl AuthService for AuthServiceImpl {
         tracing::info!(username_or_email = %req.username_or_email, "login attempt");
 
         if req.username_or_email.is_empty() || req.password.is_empty() {
-            return Err(Status::invalid_argument("username/email and password required"));
+            return Err(Status::invalid_argument(
+                "username/email and password required",
+            ));
         }
 
         let user_row = sqlx::query(
@@ -523,7 +521,9 @@ impl AuthService for AuthServiceImpl {
         })?;
 
         if rows.rows_affected() == 0 {
-            return Err(Status::permission_denied("session not found or already revoked"));
+            return Err(Status::permission_denied(
+                "session not found or already revoked",
+            ));
         }
 
         tracing::info!(user_id = %auth.user_id, session_id = %session_id, "logout");
@@ -531,10 +531,7 @@ impl AuthService for AuthServiceImpl {
         Ok(Response::new(LogoutResponse {}))
     }
 
-    async fn delete_account(
-        &self,
-        request: Request<()>,
-    ) -> Result<Response<()>, Status> {
+    async fn delete_account(&self, request: Request<()>) -> Result<Response<()>, Status> {
         let auth = self.auth(request.metadata())?;
         let user_id = auth.user_id.as_uuid();
 
@@ -640,7 +637,9 @@ impl AuthService for AuthServiceImpl {
         })?;
 
         if rows.rows_affected() == 0 {
-            return Err(Status::permission_denied("session not found or already revoked"));
+            return Err(Status::permission_denied(
+                "session not found or already revoked",
+            ));
         }
 
         tracing::info!(user_id = %auth.user_id, session_id = %session_id, "session revoked");
@@ -654,7 +653,16 @@ impl AuthService for AuthServiceImpl {
     ) -> Result<Response<ListSessionsResponse>, Status> {
         let auth = self.auth(request.metadata())?;
 
-        let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                uuid::Uuid,
+                String,
+                String,
+                chrono::DateTime<chrono::Utc>,
+                chrono::DateTime<chrono::Utc>,
+            ),
+        >(
             r#"
             SELECT id, device_id, device_name, created_at, last_used_at
             FROM sessions

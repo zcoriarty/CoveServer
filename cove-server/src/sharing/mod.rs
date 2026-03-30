@@ -24,7 +24,10 @@ impl ShareServiceImpl {
         Self { pool, jwt_secret }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 
@@ -68,8 +71,8 @@ impl ShareService for ShareServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let recipient_id = UserId::parse(&req.recipient_user_id)
             .map_err(|_| Status::invalid_argument("invalid recipient_user_id"))?;
@@ -122,13 +125,11 @@ impl ShareService for ShareServiceImpl {
         .await
         .map_err(|_| Status::internal("database error"))?;
 
-        sqlx::query(
-            "UPDATE posts SET share_count = share_count + 1 WHERE id = $1",
-        )
-        .bind(post_id.as_uuid())
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
+        sqlx::query("UPDATE posts SET share_count = share_count + 1 WHERE id = $1")
+            .bind(post_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
 
         tx.commit()
             .await
@@ -162,7 +163,10 @@ impl ShareService for ShareServiceImpl {
 
         let pagination = PaginationParams::from_proto(
             req.pagination.as_ref().map(|p| p.page_size).unwrap_or(20),
-            req.pagination.as_ref().map(|p| p.cursor.as_str()).unwrap_or(""),
+            req.pagination
+                .as_ref()
+                .map(|p| p.cursor.as_str())
+                .unwrap_or(""),
         );
 
         let limit = (pagination.limit + 1) as i64;
@@ -212,18 +216,18 @@ impl ShareService for ShareServiceImpl {
         let has_more = rows.len() as i64 > pagination.limit as i64;
         let truncated: Vec<_> = rows.iter().take(pagination.limit as usize).collect();
 
-        let sender_ids: Vec<uuid::Uuid> = truncated
-            .iter()
-            .map(|r| r.1)
-            .fold(vec![], |mut acc, id| {
+        let sender_ids: Vec<uuid::Uuid> =
+            truncated.iter().map(|r| r.1).fold(vec![], |mut acc, id| {
                 if !acc.contains(&id) {
                     acc.push(id);
                 }
                 acc
             });
 
-        let mut sender_map: std::collections::HashMap<uuid::Uuid, (String, String, Option<uuid::Uuid>)> =
-            std::collections::HashMap::new();
+        let mut sender_map: std::collections::HashMap<
+            uuid::Uuid,
+            (String, String, Option<uuid::Uuid>),
+        > = std::collections::HashMap::new();
 
         for sid in &sender_ids {
             if let Ok(row) = sqlx::query_as::<_, (String, String, Option<uuid::Uuid>)>(
@@ -245,10 +249,8 @@ impl ShareService for ShareServiceImpl {
         let items: Vec<SharedPostItem> = truncated
             .iter()
             .map(|(share_id, sender_id, post_id, created_at)| {
-                let (username, display_name, avatar_media_id) = sender_map
-                    .get(sender_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let (username, display_name, avatar_media_id) =
+                    sender_map.get(sender_id).cloned().unwrap_or_default();
                 let avatar_url = avatar_media_id
                     .map(|media_id| format!("/media/{}", media_id))
                     .unwrap_or_default();

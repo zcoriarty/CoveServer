@@ -25,10 +25,9 @@ pub async fn enqueue(
 }
 
 pub async fn get_pending_count(pool: &PgPool) -> CoveResult<i64> {
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE state = 'pending'")
-            .fetch_one(pool)
-            .await
-            .map_err(|e| CoveError::Database(e.to_string()))?;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE state = 'pending'")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| CoveError::Database(e.to_string()))?;
     Ok(count)
 }

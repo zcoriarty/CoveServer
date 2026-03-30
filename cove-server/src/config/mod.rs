@@ -159,8 +159,8 @@ impl CoveConfig {
 
         let default_storage_endpoint =
             first_non_empty_env(&["SUPABASE_STORAGE_ENDPOINT"]).unwrap_or_default();
-        let default_storage_bucket =
-            first_non_empty_env(&["SUPABASE_STORAGE_BUCKET"]).unwrap_or_else(|| "media".to_string());
+        let default_storage_bucket = first_non_empty_env(&["SUPABASE_STORAGE_BUCKET"])
+            .unwrap_or_else(|| "media".to_string());
         let default_storage_api_key =
             first_non_empty_env(&["SUPABASE_SECRET_KEY"]).unwrap_or_default();
 
@@ -229,10 +229,14 @@ impl CoveConfig {
             }
         }
 
-        if let Some(value) = first_non_empty_env(&["COVE_PUSH__APNS_KEY_ID", "COVE__PUSH__APNS_KEY_ID"]) {
+        if let Some(value) =
+            first_non_empty_env(&["COVE_PUSH__APNS_KEY_ID", "COVE__PUSH__APNS_KEY_ID"])
+        {
             parsed.push.apns_key_id = value;
         }
-        if let Some(value) = first_non_empty_env(&["COVE_PUSH__APNS_TEAM_ID", "COVE__PUSH__APNS_TEAM_ID"]) {
+        if let Some(value) =
+            first_non_empty_env(&["COVE_PUSH__APNS_TEAM_ID", "COVE__PUSH__APNS_TEAM_ID"])
+        {
             parsed.push.apns_team_id = value;
         }
         if let Some(value) =
@@ -240,9 +244,10 @@ impl CoveConfig {
         {
             parsed.push.apns_bundle_id = value;
         }
-        if let Some(value) =
-            first_non_empty_env(&["COVE_PUSH__APNS_PRIVATE_KEY", "COVE__PUSH__APNS_PRIVATE_KEY"])
-        {
+        if let Some(value) = first_non_empty_env(&[
+            "COVE_PUSH__APNS_PRIVATE_KEY",
+            "COVE__PUSH__APNS_PRIVATE_KEY",
+        ]) {
             parsed.push.apns_private_key = value;
         }
         if let Some(value) = first_non_empty_env(&[

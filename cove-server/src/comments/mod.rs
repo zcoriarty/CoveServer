@@ -2,13 +2,13 @@
 
 use crate::auth;
 use crate::authorization::{build_user_summary, can_view_post};
+use crate::mentions;
 use cove_common::error::CoveResult;
 use cove_common::id::{CommentId, PostId, UserId};
 use cove_common::pagination::{CursorValue, PaginationParams};
 use cove_proto::cove::comment::{
-    comment_service_server::CommentService, AddCommentRequest, AddCommentResponse,
-    CommentDetail, DeleteCommentRequest, DeleteCommentResponse, ListCommentsRequest,
-    ListCommentsResponse,
+    comment_service_server::CommentService, AddCommentRequest, AddCommentResponse, CommentDetail,
+    DeleteCommentRequest, DeleteCommentResponse, ListCommentsRequest, ListCommentsResponse,
 };
 use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
@@ -25,7 +25,10 @@ impl CommentServiceImpl {
         Self { pool, jwt_secret }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 
@@ -69,8 +72,8 @@ impl CommentService for CommentServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let body = req.body.trim();
         if body.is_empty() {
@@ -130,37 +133,91 @@ impl CommentService for CommentServiceImpl {
         .await
         .map_err(|_| Status::internal("database error"))?;
 
-        sqlx::query(
-            "UPDATE posts SET comment_count = comment_count + 1 WHERE id = $1",
-        )
-        .bind(post_id.as_uuid())
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
-
-        if parent_id.is_some() {
-            sqlx::query(
-                "UPDATE comments SET reply_count = reply_count + 1 WHERE id = $1",
-            )
-            .bind(parent_id)
+        sqlx::query("UPDATE posts SET comment_count = comment_count + 1 WHERE id = $1")
+            .bind(post_id.as_uuid())
             .execute(&mut *tx)
             .await
             .map_err(|_| Status::internal("database error"))?;
+
+        if parent_id.is_some() {
+            sqlx::query("UPDATE comments SET reply_count = reply_count + 1 WHERE id = $1")
+                .bind(parent_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| Status::internal("database error"))?;
+        }
+
+        let post_author_id: uuid::Uuid =
+            sqlx::query_scalar("SELECT author_id FROM posts WHERE id = $1")
+                .bind(post_id.as_uuid())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|_| Status::internal("database error"))?;
+
+        let mentioned_usernames = mentions::extract_mentioned_usernames(body);
+        if !mentioned_usernames.is_empty() {
+            let mentioned_user_ids = mentions::resolve_mentionable_user_ids(
+                &self.pool,
+                auth.user_id,
+                &mentioned_usernames,
+            )
+            .await
+            .map_err(|_| Status::internal("database error"))?;
+
+            for mentioned_user_id in mentioned_user_ids {
+                sqlx::query(
+                    r#"
+                    INSERT INTO comment_mentions (
+                        comment_id,
+                        post_id,
+                        mentioned_user_id,
+                        mentioned_by_user_id,
+                        created_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (comment_id, mentioned_user_id) DO NOTHING
+                    "#,
+                )
+                .bind(comment_id.as_uuid())
+                .bind(post_id.as_uuid())
+                .bind(mentioned_user_id)
+                .bind(auth.user_id.as_uuid())
+                .bind(now)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| Status::internal("database error"))?;
+
+                if mentioned_user_id == post_author_id {
+                    continue;
+                }
+
+                let mention_notification_payload = serde_json::json!({
+                    "recipient_id": mentioned_user_id.to_string(),
+                    "actor_id": auth.user_id.to_string(),
+                    "notification_type": "comment",
+                    "target_id": post_id.to_string(),
+                    "message": "tagged you in a comment",
+                    "push_type": "mention",
+                    "push_title": "You were tagged",
+                    "push_body": "{actor} tagged you in a comment"
+                });
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO jobs (id, job_type, payload, state, run_at)
+                    VALUES (gen_random_uuid(), 'notification', $1, 'pending', NOW())
+                    "#,
+                )
+                .bind(sqlx::types::Json(&mention_notification_payload))
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| Status::internal("database error"))?;
+            }
         }
 
         tx.commit()
             .await
             .map_err(|_| Status::internal("database error"))?;
-
-        let post_row = sqlx::query(
-            "SELECT author_id FROM posts WHERE id = $1",
-        )
-        .bind(post_id.as_uuid())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
-
-        let post_author_id: uuid::Uuid = post_row.get(0);
 
         if post_author_id != *auth.user_id.as_uuid() {
             let _ = Self::enqueue_notification_job(
@@ -190,8 +247,8 @@ impl CommentService for CommentServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let can_view = can_view_post(&self.pool, &auth.user_id, &post_id)
             .await
@@ -203,13 +260,23 @@ impl CommentService for CommentServiceImpl {
 
         let pagination = PaginationParams::from_proto(
             req.pagination.as_ref().map(|p| p.page_size).unwrap_or(20),
-            req.pagination.as_ref().map(|p| p.cursor.as_str()).unwrap_or(""),
+            req.pagination
+                .as_ref()
+                .map(|p| p.cursor.as_str())
+                .unwrap_or(""),
         );
 
         let limit = (pagination.limit + 1) as i64;
 
         let (rows, has_more): (Vec<_>, bool) = if let Some(ref cursor) = pagination.cursor {
-            let rows: Vec<(uuid::Uuid, uuid::Uuid, String, Option<uuid::Uuid>, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            let rows: Vec<(
+                uuid::Uuid,
+                uuid::Uuid,
+                String,
+                Option<uuid::Uuid>,
+                i32,
+                chrono::DateTime<chrono::Utc>,
+            )> = sqlx::query_as(
                 r#"
                 SELECT c.id, c.author_id, c.body, c.parent_id, c.reply_count, c.created_at
                 FROM comments c
@@ -230,7 +297,14 @@ impl CommentService for CommentServiceImpl {
             let has_more = rows.len() as i64 > pagination.limit as i64;
             (rows, has_more)
         } else {
-            let rows: Vec<(uuid::Uuid, uuid::Uuid, String, Option<uuid::Uuid>, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            let rows: Vec<(
+                uuid::Uuid,
+                uuid::Uuid,
+                String,
+                Option<uuid::Uuid>,
+                i32,
+                chrono::DateTime<chrono::Utc>,
+            )> = sqlx::query_as(
                 r#"
                 SELECT c.id, c.author_id, c.body, c.parent_id, c.reply_count, c.created_at
                 FROM comments c
@@ -250,10 +324,7 @@ impl CommentService for CommentServiceImpl {
         };
 
         let comments: Vec<CommentDetail> = {
-            let truncated: Vec<_> = rows
-                .iter()
-                .take(pagination.limit as usize)
-                .collect();
+            let truncated: Vec<_> = rows.iter().take(pagination.limit as usize).collect();
 
             let author_ids: Vec<uuid::Uuid> = truncated
                 .iter()
@@ -266,18 +337,19 @@ impl CommentService for CommentServiceImpl {
                 std::collections::HashMap::new();
 
             if !author_ids.is_empty() {
-                let author_rows = sqlx::query_as::<_, (uuid::Uuid, String, String, Option<uuid::Uuid>)>(
-                    r#"
+                let author_rows =
+                    sqlx::query_as::<_, (uuid::Uuid, String, String, Option<uuid::Uuid>)>(
+                        r#"
                     SELECT u.id, u.username, COALESCE(u.display_name, ''), p.avatar_media_id
                     FROM users u
                     LEFT JOIN profiles p ON p.user_id = u.id
                     WHERE u.id = ANY($1)
                     "#,
-                )
-                .bind(&author_ids)
-                .fetch_all(&self.pool)
-                .await
-                .unwrap_or_default();
+                    )
+                    .bind(&author_ids)
+                    .fetch_all(&self.pool)
+                    .await
+                    .unwrap_or_default();
 
                 for (user_id, username, display_name, avatar_media_id) in author_rows {
                     let avatar_url = avatar_media_id
@@ -304,40 +376,42 @@ impl CommentService for CommentServiceImpl {
 
             truncated
                 .iter()
-                .map(|(id, author_id, body, parent_id, reply_count, created_at)| {
-                    let (username, display_name, avatar_url) = author_map
-                        .get(author_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    let author = build_user_summary(
-                        &UserId::from_uuid(*author_id),
-                        username,
-                        display_name,
-                        avatar_url,
-                        following_set.contains(author_id),
-                    );
-                    CommentDetail {
-                        comment_id: id.to_string(),
-                        author: Some(author),
-                        body: body.clone(),
-                        parent_comment_id: parent_id.map(|u| u.to_string()),
-                        reply_count: *reply_count,
-                        created_at: Some(prost_types::Timestamp {
-                            seconds: created_at.timestamp(),
-                            nanos: created_at.timestamp_subsec_nanos() as i32,
-                        }),
-                    }
-                })
+                .map(
+                    |(id, author_id, body, parent_id, reply_count, created_at)| {
+                        let (username, display_name, avatar_url) =
+                            author_map.get(author_id).cloned().unwrap_or_default();
+                        let author = build_user_summary(
+                            &UserId::from_uuid(*author_id),
+                            username,
+                            display_name,
+                            avatar_url,
+                            following_set.contains(author_id),
+                        );
+                        CommentDetail {
+                            comment_id: id.to_string(),
+                            author: Some(author),
+                            body: body.clone(),
+                            parent_comment_id: parent_id.map(|u| u.to_string()),
+                            reply_count: *reply_count,
+                            created_at: Some(prost_types::Timestamp {
+                                seconds: created_at.timestamp(),
+                                nanos: created_at.timestamp_subsec_nanos() as i32,
+                            }),
+                        }
+                    },
+                )
                 .collect()
         };
 
         let next_cursor = if has_more && rows.len() > pagination.limit as usize {
-            rows.get(pagination.limit as usize - 1).map(|r| {
-                PaginationParams::encode_cursor(&CursorValue {
-                    timestamp: r.5,
-                    id: r.0,
+            rows.get(pagination.limit as usize - 1)
+                .map(|r| {
+                    PaginationParams::encode_cursor(&CursorValue {
+                        timestamp: r.5,
+                        id: r.0,
+                    })
                 })
-            }).unwrap_or_default()
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -386,13 +460,11 @@ impl CommentService for CommentServiceImpl {
             ));
         }
 
-        sqlx::query(
-            "UPDATE comments SET is_deleted = TRUE WHERE id = $1",
-        )
-        .bind(comment_id.as_uuid())
-        .execute(&self.pool)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
+        sqlx::query("UPDATE comments SET is_deleted = TRUE WHERE id = $1")
+            .bind(comment_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
 
         Ok(Response::new(DeleteCommentResponse {}))
     }

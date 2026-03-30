@@ -7,11 +7,11 @@ use cove_common::id::{PostId, UserId};
 use cove_common::pagination::{CursorValue, PaginationParams};
 use cove_proto::cove::common::{MediaReference, MediaType};
 use cove_proto::cove::profile::{
-    profile_service_server::ProfileService, GetProfileGridRequest, GetProfileGridResponse,
-    GetProfilePortalsRequest, GetProfilePortalsResponse, GetProfileRequest, GetProfileResponse,
-    GetPortalFeedRequest, GetPortalFeedResponse, PortalSummary, ProfileGridItem,
-    ReorderPortalsRequest, ReorderPortalsResponse, UpdatePortalRequest, UpdatePortalResponse,
-    UpdateProfileRequest, UpdateProfileResponse,
+    profile_service_server::ProfileService, GetPortalFeedRequest, GetPortalFeedResponse,
+    GetProfileGridRequest, GetProfileGridResponse, GetProfilePortalsRequest,
+    GetProfilePortalsResponse, GetProfileRequest, GetProfileResponse, PortalSummary,
+    ProfileGridItem, ReorderPortalsRequest, ReorderPortalsResponse, UpdatePortalRequest,
+    UpdatePortalResponse, UpdateProfileRequest, UpdateProfileResponse,
 };
 use prost_types::Timestamp;
 use sqlx::{PgPool, Row};
@@ -51,13 +51,11 @@ impl ProfileServiceImpl {
             return Ok(true);
         }
 
-        let profile_row = sqlx::query(
-            r#"SELECT is_private FROM profiles WHERE user_id = $1"#,
-        )
-        .bind(target_id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
+        let profile_row = sqlx::query(r#"SELECT is_private FROM profiles WHERE user_id = $1"#)
+            .bind(target_id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
 
         let profile = profile_row.ok_or_else(|| Status::not_found("profile not found"))?;
         let is_private: bool = profile.get(0);
@@ -91,8 +89,8 @@ impl ProfileService for ProfileServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target_id = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target_id =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
 
         let user_row = sqlx::query(
             r#"
@@ -151,11 +149,12 @@ impl ProfileService for ProfileServiceImpl {
             can_see_full = follow_row.is_some();
         }
 
-        let (bio_visible, follower_count_visible, following_count_visible, post_count_visible) = if can_see_full {
-            (bio.clone(), follower_count, following_count, post_count)
-        } else {
-            (String::new(), 0, 0, 0)
-        };
+        let (bio_visible, follower_count_visible, following_count_visible, post_count_visible) =
+            if can_see_full {
+                (bio.clone(), follower_count, following_count, post_count)
+            } else {
+                (String::new(), 0, 0, 0)
+            };
 
         let is_following = if is_own_profile {
             false
@@ -171,7 +170,8 @@ impl ProfileService for ProfileServiceImpl {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| Status::internal("database error"))?;
-            row.map(|r| r.get::<String, _>(0) == "accepted").unwrap_or(false)
+            row.map(|r| r.get::<String, _>(0) == "accepted")
+                .unwrap_or(false)
         };
 
         let is_followed_by = if is_own_profile {
@@ -259,12 +259,14 @@ impl ProfileService for ProfileServiceImpl {
             }
         }
         if let Some(is_private) = req.is_private {
-            sqlx::query(r#"UPDATE profiles SET is_private = $1, updated_at = NOW() WHERE user_id = $2"#)
-                .bind(is_private)
-                .bind(auth.user_id.as_uuid())
-                .execute(&mut *tx)
-                .await
-                .map_err(|_| Status::internal("database error"))?;
+            sqlx::query(
+                r#"UPDATE profiles SET is_private = $1, updated_at = NOW() WHERE user_id = $2"#,
+            )
+            .bind(is_private)
+            .bind(auth.user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
         }
 
         let row = sqlx::query(
@@ -314,8 +316,8 @@ impl ProfileService for ProfileServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target_id = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target_id =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
 
         let can_view_posts = self.can_view_profile_posts(&auth, target_id).await?;
         if !can_view_posts {
@@ -324,9 +326,10 @@ impl ProfileService for ProfileServiceImpl {
             ));
         }
 
-        let (page_size, cursor_str) = req.pagination.as_ref().map_or((20, ""), |p| {
-            (p.page_size.clamp(1, 50), p.cursor.as_str())
-        });
+        let (page_size, cursor_str) = req
+            .pagination
+            .as_ref()
+            .map_or((20, ""), |p| (p.page_size.clamp(1, 50), p.cursor.as_str()));
         let pagination = PaginationParams::from_proto(page_size, cursor_str);
 
         let (rows, has_more) = if let Some(cursor) = &pagination.cursor {
@@ -457,8 +460,8 @@ impl ProfileService for ProfileServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target_id = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target_id =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
         let can_edit = auth.user_id == target_id;
         let can_view_posts = self.can_view_profile_posts(&auth, target_id).await?;
         if !can_view_posts {
@@ -493,7 +496,9 @@ impl ProfileService for ProfileServiceImpl {
             .map_err(|_| Status::internal("database error"))?;
 
             if !owns_post {
-                return Err(Status::invalid_argument("post_id does not belong to viewer"));
+                return Err(Status::invalid_argument(
+                    "post_id does not belong to viewer",
+                ));
             }
         }
 
@@ -595,7 +600,10 @@ impl ProfileService for ProfileServiceImpl {
             })
             .collect();
 
-        Ok(Response::new(GetProfilePortalsResponse { portals, can_edit }))
+        Ok(Response::new(GetProfilePortalsResponse {
+            portals,
+            can_edit,
+        }))
     }
 
     async fn update_portal(
@@ -739,8 +747,8 @@ impl ProfileService for ProfileServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target_id = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target_id =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
         let portal_id = uuid::Uuid::parse_str(req.portal_id.trim())
             .map_err(|_| Status::invalid_argument("invalid portal_id"))?;
         let can_view_posts = self.can_view_profile_posts(&auth, target_id).await?;
@@ -835,9 +843,10 @@ impl ProfileService for ProfileServiceImpl {
             }
         };
 
-        let (page_size, cursor_str) = req.pagination.as_ref().map_or((20, ""), |p| {
-            (p.page_size.clamp(1, 50), p.cursor.as_str())
-        });
+        let (page_size, cursor_str) = req
+            .pagination
+            .as_ref()
+            .map_or((20, ""), |p| (p.page_size.clamp(1, 50), p.cursor.as_str()));
         let pagination = PaginationParams::from_proto(page_size, cursor_str);
         let limit_plus_one = pagination.limit as i64 + 1;
 

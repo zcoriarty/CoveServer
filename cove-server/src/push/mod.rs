@@ -129,6 +129,7 @@ impl PushService {
         self.send_templated_push(
             recipient_id,
             actor_id,
+            None,
             "New follow request",
             "{actor} requested to follow you",
             "follow_request",
@@ -144,6 +145,7 @@ impl PushService {
         self.send_templated_push(
             recipient_id,
             actor_id,
+            None,
             "Follow request accepted",
             "{actor} accepted your follow request",
             "follow_accepted",
@@ -156,75 +158,57 @@ impl PushService {
         recipient_id: UserId,
         actor_id: UserId,
         notification_type: &str,
+        target_id: Option<uuid::Uuid>,
+        push_type_override: Option<&str>,
+        push_title_override: Option<&str>,
+        push_body_override: Option<&str>,
     ) -> Result<()> {
-        match notification_type {
-            "follow_request" => self.send_follow_request_push(recipient_id, actor_id).await,
-            "follow_accepted" => self.send_follow_accepted_push(recipient_id, actor_id).await,
-            "new_follower" => {
-                self.send_templated_push(
-                    recipient_id,
-                    actor_id,
-                    "New follower",
-                    "{actor} started following you",
-                    "new_follower",
-                )
-                .await
-            }
-            "like" => {
-                self.send_templated_push(
-                    recipient_id,
-                    actor_id,
-                    "New like",
-                    "{actor} liked your post",
-                    "like",
-                )
-                .await
-            }
-            "comment" => {
-                self.send_templated_push(
-                    recipient_id,
-                    actor_id,
-                    "New comment",
-                    "{actor} commented on your post",
-                    "comment",
-                )
-                .await
-            }
-            "share" => {
-                self.send_templated_push(
-                    recipient_id,
-                    actor_id,
-                    "Post shared",
-                    "{actor} shared a post with you",
-                    "share",
-                )
-                .await
-            }
-            "new_post" => {
-                self.send_templated_push(
-                    recipient_id,
-                    actor_id,
-                    "New post",
-                    "{actor} shared a new post",
-                    "new_post",
-                )
-                .await
-            }
-            _ => Ok(()),
-        }
+        let Some((default_title, default_body_template)) =
+            Self::default_push_template(notification_type)
+        else {
+            return Ok(());
+        };
+
+        self.send_templated_push(
+            recipient_id,
+            actor_id,
+            target_id,
+            push_title_override.unwrap_or(default_title),
+            push_body_override.unwrap_or(default_body_template),
+            push_type_override.unwrap_or(notification_type),
+        )
+        .await
     }
 
     async fn send_templated_push(
         &self,
         recipient_id: UserId,
         actor_id: UserId,
+        target_id: Option<uuid::Uuid>,
         title: &str,
         body_template: &str,
         event_type: &str,
     ) -> Result<()> {
         let actor_name = self.load_actor_name(actor_id).await?;
         let body = body_template.replace("{actor}", &actor_name);
-        self.send_push(recipient_id, title, &body, event_type).await
+        self.send_push(recipient_id, actor_id, target_id, title, &body, event_type)
+            .await
+    }
+
+    fn default_push_template(notification_type: &str) -> Option<(&'static str, &'static str)> {
+        match notification_type {
+            "follow_request" => Some(("New follow request", "{actor} requested to follow you")),
+            "follow_accepted" => Some((
+                "Follow request accepted",
+                "{actor} accepted your follow request",
+            )),
+            "new_follower" => Some(("New follower", "{actor} started following you")),
+            "like" => Some(("New like", "{actor} liked your post")),
+            "comment" => Some(("New comment", "{actor} commented on your post")),
+            "share" => Some(("Post shared", "{actor} shared a post with you")),
+            "new_post" => Some(("New post", "{actor} shared a new post")),
+            _ => None,
+        }
     }
 
     async fn load_actor_name(&self, actor_id: UserId) -> Result<String> {
@@ -241,6 +225,8 @@ impl PushService {
     async fn send_push(
         &self,
         recipient_id: UserId,
+        actor_id: UserId,
+        target_id: Option<uuid::Uuid>,
         title: &str,
         body: &str,
         event_type: &str,
@@ -277,7 +263,15 @@ impl PushService {
                 PushEnvironment::parse(&environment_str).unwrap_or(self.default_environment);
 
             match apns
-                .send_alert(&token, environment, title, &body, event_type)
+                .send_alert(
+                    &token,
+                    environment,
+                    title,
+                    &body,
+                    event_type,
+                    actor_id,
+                    target_id,
+                )
                 .await
             {
                 Ok(DeliveryResult::Sent) => {}
@@ -392,14 +386,13 @@ impl ApnsClient {
                 )
             })?
         };
-        let encoding_key = EncodingKey::from_ec_pem(&private_key_bytes)
-            .with_context(|| {
-                if use_inline_key {
-                    "failed to parse APNs private key from push.apns_private_key (expected .p8 EC key)"
-                } else {
-                    "failed to parse APNs private key (expected .p8 EC key)"
-                }
-            })?;
+        let encoding_key = EncodingKey::from_ec_pem(&private_key_bytes).with_context(|| {
+            if use_inline_key {
+                "failed to parse APNs private key from push.apns_private_key (expected .p8 EC key)"
+            } else {
+                "failed to parse APNs private key (expected .p8 EC key)"
+            }
+        })?;
 
         let client = Client::builder()
             .use_rustls_tls()
@@ -424,6 +417,8 @@ impl ApnsClient {
         title: &str,
         body: &str,
         event_type: &str,
+        actor_id: UserId,
+        target_id: Option<uuid::Uuid>,
     ) -> Result<DeliveryResult> {
         let jwt = self.provider_token().await?;
         let endpoint = format!("https://{}/3/device/{}", environment.apns_host(), token);
@@ -437,7 +432,9 @@ impl ApnsClient {
                 "sound": "default",
                 "badge": 1,
             },
-            "type": event_type
+            "type": event_type,
+            "actor_id": actor_id.to_string(),
+            "target_id": target_id.map(|id| id.to_string()).unwrap_or_default()
         });
 
         let response = self

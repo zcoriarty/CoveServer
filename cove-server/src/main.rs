@@ -137,11 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notification_svc =
         NotificationServiceImpl::new(pool.clone(), jwt_secret.clone(), push_service.clone());
     let media_svc = MediaServiceImpl::new(pool.clone(), storage.clone(), jwt_secret.clone());
-    let admin_svc = AdminServiceImpl::new(
-        pool.clone(),
-        jwt_secret.clone(),
-        storage.clone(),
-    );
+    let admin_svc = AdminServiceImpl::new(pool.clone(), jwt_secret.clone(), storage.clone());
 
     // --- Health / Metrics Endpoint (HTTP on port 9090) ---
     let metrics_handle_for_health = metrics_handle;

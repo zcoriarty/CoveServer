@@ -287,7 +287,8 @@ mod tests {
 
     #[test]
     fn treats_supabase_bucket_not_found_400_as_missing() {
-        let body = r#"{"statusCode":"404","error":"Bucket not found","message":"Bucket not found"}"#;
+        let body =
+            r#"{"statusCode":"404","error":"Bucket not found","message":"Bucket not found"}"#;
         assert!(is_bucket_missing_response(StatusCode::BAD_REQUEST, body));
     }
 
@@ -296,5 +297,4 @@ mod tests {
         let body = r#"{"statusCode":"400","error":"Bad request","message":"Invalid request"}"#;
         assert!(!is_bucket_missing_response(StatusCode::BAD_REQUEST, body));
     }
-
 }

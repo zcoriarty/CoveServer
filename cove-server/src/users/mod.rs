@@ -43,8 +43,8 @@ impl UserService for UserServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let target_id = UserId::parse(&req.user_id)
-            .map_err(|_| Status::invalid_argument("invalid user_id"))?;
+        let target_id =
+            UserId::parse(&req.user_id).map_err(|_| Status::invalid_argument("invalid user_id"))?;
 
         if auth.user_id != target_id && !auth.is_admin {
             return Err(Status::permission_denied("must be self or admin"));
@@ -134,7 +134,9 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
 
         if req.current_password.is_empty() || req.new_password.is_empty() {
-            return Err(Status::invalid_argument("current and new password required"));
+            return Err(Status::invalid_argument(
+                "current and new password required",
+            ));
         }
 
         let row = sqlx::query(

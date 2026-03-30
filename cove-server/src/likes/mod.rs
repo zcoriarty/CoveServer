@@ -5,8 +5,8 @@ use crate::authorization::can_view_post;
 use cove_common::error::CoveResult;
 use cove_common::id::{PostId, UserId};
 use cove_proto::cove::like::{
-    like_service_server::LikeService, GetLikeStatusRequest, GetLikeStatusResponse,
-    LikePostRequest, LikePostResponse, UnlikePostRequest, UnlikePostResponse,
+    like_service_server::LikeService, GetLikeStatusRequest, GetLikeStatusResponse, LikePostRequest,
+    LikePostResponse, UnlikePostRequest, UnlikePostResponse,
 };
 use sqlx::{PgPool, Row};
 use tonic::{Request, Response, Status};
@@ -23,7 +23,10 @@ impl LikeServiceImpl {
         Self { pool, jwt_secret }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 
@@ -67,8 +70,8 @@ impl LikeService for LikeServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let can_view = can_view_post(&self.pool, &auth.user_id, &post_id)
             .await
@@ -100,22 +103,18 @@ impl LikeService for LikeServiceImpl {
         let inserted = insert_result.rows_affected() > 0;
 
         if inserted {
-            sqlx::query(
-                "UPDATE posts SET like_count = like_count + 1 WHERE id = $1",
-            )
-            .bind(post_id.as_uuid())
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| Status::internal("database error"))?;
+            sqlx::query("UPDATE posts SET like_count = like_count + 1 WHERE id = $1")
+                .bind(post_id.as_uuid())
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| Status::internal("database error"))?;
         }
 
-        let like_count: i32 = sqlx::query_scalar(
-            "SELECT like_count FROM posts WHERE id = $1",
-        )
-        .bind(post_id.as_uuid())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
+        let like_count: i32 = sqlx::query_scalar("SELECT like_count FROM posts WHERE id = $1")
+            .bind(post_id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
 
         tx.commit()
             .await
@@ -152,8 +151,8 @@ impl LikeService for LikeServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let mut tx = self
             .pool
@@ -161,32 +160,26 @@ impl LikeService for LikeServiceImpl {
             .await
             .map_err(|_| Status::internal("database error"))?;
 
-        let delete_result = sqlx::query(
-            "DELETE FROM likes WHERE user_id = $1 AND post_id = $2",
-        )
-        .bind(auth.user_id.as_uuid())
-        .bind(post_id.as_uuid())
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
-
-        if delete_result.rows_affected() > 0 {
-            sqlx::query(
-                "UPDATE posts SET like_count = GREATEST(0, like_count - 1) WHERE id = $1",
-            )
+        let delete_result = sqlx::query("DELETE FROM likes WHERE user_id = $1 AND post_id = $2")
+            .bind(auth.user_id.as_uuid())
             .bind(post_id.as_uuid())
             .execute(&mut *tx)
             .await
             .map_err(|_| Status::internal("database error"))?;
+
+        if delete_result.rows_affected() > 0 {
+            sqlx::query("UPDATE posts SET like_count = GREATEST(0, like_count - 1) WHERE id = $1")
+                .bind(post_id.as_uuid())
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| Status::internal("database error"))?;
         }
 
-        let like_count: i32 = sqlx::query_scalar(
-            "SELECT like_count FROM posts WHERE id = $1",
-        )
-        .bind(post_id.as_uuid())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
+        let like_count: i32 = sqlx::query_scalar("SELECT like_count FROM posts WHERE id = $1")
+            .bind(post_id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
 
         tx.commit()
             .await
@@ -202,8 +195,8 @@ impl LikeService for LikeServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let can_view = can_view_post(&self.pool, &auth.user_id, &post_id)
             .await
@@ -222,17 +215,12 @@ impl LikeService for LikeServiceImpl {
         .await
         .map_err(|_| Status::internal("database error"))?;
 
-        let like_count: i32 = sqlx::query_scalar(
-            "SELECT like_count FROM posts WHERE id = $1",
-        )
-        .bind(post_id.as_uuid())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|_| Status::internal("database error"))?;
+        let like_count: i32 = sqlx::query_scalar("SELECT like_count FROM posts WHERE id = $1")
+            .bind(post_id.as_uuid())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
 
-        Ok(Response::new(GetLikeStatusResponse {
-            liked,
-            like_count,
-        }))
+        Ok(Response::new(GetLikeStatusResponse { liked, like_count }))
     }
 }

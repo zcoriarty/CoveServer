@@ -1,6 +1,7 @@
 //! Post service and gRPC handler.
 
 use crate::auth;
+use crate::mentions;
 use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{FeedEntryId, MediaId, PostId, UserId};
 use cove_proto::cove::common::{Location, MediaReference, MediaType, UserSummary, Visibility};
@@ -25,7 +26,10 @@ impl PostServiceImpl {
         Self { pool, jwt_secret }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 
@@ -60,7 +64,7 @@ impl PostServiceImpl {
 
         if !exists {
             return Err(Status::permission_denied(
-                "only the post author can manage portals for this post",
+                "only the post author can manage collections for this post",
             ));
         }
 
@@ -287,8 +291,7 @@ impl PostService for PostServiceImpl {
             .media_ids
             .iter()
             .map(|media_id| {
-                MediaId::parse(media_id)
-                    .map_err(|_| Status::invalid_argument("invalid media_id"))
+                MediaId::parse(media_id).map_err(|_| Status::invalid_argument("invalid media_id"))
             })
             .collect::<Result<_, _>>()?;
         if parsed_media_ids.is_empty() {
@@ -308,7 +311,11 @@ impl PostService for PostServiceImpl {
 
         let (loc_lat, loc_lng, loc_name) = if let Some(ref loc) = req.location {
             if loc.latitude != 0.0 || loc.longitude != 0.0 {
-                (Some(loc.latitude), Some(loc.longitude), Some(loc.display_name.clone()))
+                (
+                    Some(loc.latitude),
+                    Some(loc.longitude),
+                    Some(loc.display_name.clone()),
+                )
             } else {
                 (None, None, None)
             }
@@ -392,13 +399,9 @@ impl PostService for PostServiceImpl {
             }
         }
 
-        if let Some((portal_id, _)) = Self::resolve_or_create_portal(
-            &mut tx,
-            auth.user_id,
-            &req.portal_id,
-            &req.portal_name,
-        )
-        .await?
+        if let Some((portal_id, _)) =
+            Self::resolve_or_create_portal(&mut tx, auth.user_id, &req.portal_id, &req.portal_name)
+                .await?
         {
             sqlx::query(
                 r#"
@@ -462,6 +465,57 @@ impl PostService for PostServiceImpl {
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
 
+        let mentioned_usernames = mentions::extract_mentioned_usernames(req.caption.as_str());
+        if !mentioned_usernames.is_empty() {
+            let mentioned_user_ids = mentions::resolve_mentionable_user_ids(
+                &self.pool,
+                auth.user_id,
+                &mentioned_usernames,
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+            for mentioned_user_id in mentioned_user_ids {
+                sqlx::query(
+                    r#"
+                    INSERT INTO post_mentions (post_id, mentioned_user_id, mentioned_by_user_id, created_at)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (post_id, mentioned_user_id) DO NOTHING
+                    "#,
+                )
+                .bind(post_id.as_uuid())
+                .bind(mentioned_user_id)
+                .bind(auth.user_id.as_uuid())
+                .bind(created_at)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+
+                let mention_notification_payload = serde_json::json!({
+                    "recipient_id": mentioned_user_id.to_string(),
+                    "actor_id": auth.user_id.to_string(),
+                    "notification_type": "comment",
+                    "target_id": post_id.to_string(),
+                    "message": "tagged you in a post",
+                    "push_type": "mention",
+                    "push_title": "You were tagged",
+                    "push_body": "{actor} tagged you in a post"
+                });
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO jobs (id, job_type, payload, state)
+                    VALUES ($1, 'notification', $2, 'pending')
+                    "#,
+                )
+                .bind(uuid::Uuid::now_v7())
+                .bind(mention_notification_payload)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            }
+        }
+
         tx.commit()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -482,8 +536,8 @@ impl PostService for PostServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let post_row = sqlx::query(
             r#"
@@ -539,7 +593,9 @@ impl PostService for PostServiceImpl {
         };
 
         if !can_view {
-            return Err(Status::permission_denied("not authorized to view this post"));
+            return Err(Status::permission_denied(
+                "not authorized to view this post",
+            ));
         }
 
         let liked_by_viewer = sqlx::query_scalar::<_, bool>(
@@ -589,8 +645,8 @@ impl PostService for PostServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
         let added_at = chrono::Utc::now();
 
         let mut tx = self
@@ -601,14 +657,10 @@ impl PostService for PostServiceImpl {
 
         Self::ensure_post_owned_by_user(&mut tx, post_id, auth.user_id).await?;
 
-        let (portal_id, portal_name) = Self::resolve_or_create_portal(
-            &mut tx,
-            auth.user_id,
-            &req.portal_id,
-            &req.portal_name,
-        )
-        .await?
-        .ok_or_else(|| Status::invalid_argument("portal_id or portal_name is required"))?;
+        let (portal_id, portal_name) =
+            Self::resolve_or_create_portal(&mut tx, auth.user_id, &req.portal_id, &req.portal_name)
+                .await?
+                .ok_or_else(|| Status::invalid_argument("portal_id or portal_name is required"))?;
 
         sqlx::query(
             r#"
@@ -647,8 +699,8 @@ impl PostService for PostServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
         let portal_id = uuid::Uuid::parse_str(req.portal_id.trim())
             .map_err(|_| Status::invalid_argument("invalid portal_id"))?;
 
@@ -711,8 +763,8 @@ impl PostService for PostServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         let row = sqlx::query(
             r#"
@@ -752,8 +804,8 @@ impl PostService for PostServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let post_id = PostId::parse(&req.post_id)
-            .map_err(|_| Status::invalid_argument("invalid post_id"))?;
+        let post_id =
+            PostId::parse(&req.post_id).map_err(|_| Status::invalid_argument("invalid post_id"))?;
 
         if req.clear_location && req.location.is_some() {
             return Err(Status::invalid_argument(

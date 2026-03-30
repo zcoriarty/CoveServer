@@ -11,10 +11,7 @@ use uuid::Uuid;
 type JobResult = Result<(), Box<dyn std::error::Error>>;
 
 /// Feed fanout: insert feed_entries for all followers of the post author.
-pub async fn handle_feed_fanout(
-    pool: &PgPool,
-    payload: &serde_json::Value,
-) -> JobResult {
+pub async fn handle_feed_fanout(pool: &PgPool, payload: &serde_json::Value) -> JobResult {
     let post_id = payload["post_id"].as_str().ok_or("missing post_id")?;
     let author_id = payload["author_id"].as_str().ok_or("missing author_id")?;
 
@@ -303,6 +300,9 @@ pub async fn handle_notification(
         .ok_or("missing notification_type")?;
     let target_id = payload["target_id"].as_str().unwrap_or("");
     let message = payload["message"].as_str().unwrap_or("");
+    let push_type = payload["push_type"].as_str();
+    let push_title = payload["push_title"].as_str();
+    let push_body = payload["push_body"].as_str();
 
     let recipient_uuid = Uuid::parse_str(recipient_id)?;
     let actor_uuid = Uuid::parse_str(actor_id)?;
@@ -338,6 +338,10 @@ pub async fn handle_notification(
             UserId::from_uuid(recipient_uuid),
             UserId::from_uuid(actor_uuid),
             notification_type,
+            target_uuid,
+            push_type,
+            push_title,
+            push_body,
         )
         .await
     {

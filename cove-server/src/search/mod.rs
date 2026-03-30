@@ -2,12 +2,13 @@
 
 use crate::auth;
 use crate::authorization::build_user_summary;
+use crate::mentions;
 use cove_common::id::UserId;
 use cove_common::pagination::{CursorValue, PaginationParams};
 use cove_proto::cove::common::{MediaReference, MediaType};
 use cove_proto::cove::search::{
-    search_service_server::SearchService, SearchPostResult, SearchPostsRequest, SearchPostsResponse,
-    SearchUsersRequest, SearchUsersResponse,
+    search_service_server::SearchService, SearchPostResult, SearchPostsRequest,
+    SearchPostsResponse, SearchUsersRequest, SearchUsersResponse,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -23,7 +24,10 @@ impl SearchServiceImpl {
         Self { pool, jwt_secret }
     }
 
-    fn auth(&self, metadata: &tonic::metadata::MetadataMap) -> Result<cove_common::auth_context::AuthContext, Status> {
+    fn auth(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<cove_common::auth_context::AuthContext, Status> {
         auth::extract_auth(metadata, &self.jwt_secret).map_err(Into::into)
     }
 }
@@ -37,8 +41,9 @@ impl SearchService for SearchServiceImpl {
         let auth = self.auth(request.metadata())?;
         let req = request.into_inner();
 
-        let query = req.query.trim();
-        if query.is_empty() {
+        let scope = mentions::parse_search_scope(&req.query);
+        let query = scope.query;
+        if query.is_empty() && !scope.is_mention_query {
             return Ok(Response::new(SearchUsersResponse {
                 users: vec![],
                 pagination: Some(cove_proto::cove::common::PaginationResponse {
@@ -49,9 +54,92 @@ impl SearchService for SearchServiceImpl {
             }));
         }
 
+        if scope.is_mention_query {
+            let pattern = if query.is_empty() {
+                "%".to_string()
+            } else {
+                format!("%{}%", query)
+            };
+
+            type MentionRow = (uuid::Uuid, String, String, Option<uuid::Uuid>, bool);
+            let rows: Vec<MentionRow> = sqlx::query_as(
+                r#"
+                SELECT u.id,
+                       u.username,
+                       COALESCE(u.display_name, ''),
+                       p.avatar_media_id,
+                       (f.followee_id IS NOT NULL) AS is_following
+                FROM users u
+                LEFT JOIN profiles p ON p.user_id = u.id
+                LEFT JOIN follows f
+                  ON f.follower_id = $2
+                 AND f.followee_id = u.id
+                 AND f.state = 'accepted'
+                WHERE u.account_state != 'suspended'
+                  AND u.id <> $2
+                  AND (f.followee_id IS NOT NULL OR COALESCE(p.is_private, TRUE) = FALSE)
+                  AND ($3 = '' OR u.username ILIKE $1 OR u.display_name ILIKE $1)
+                ORDER BY
+                  CASE WHEN f.followee_id IS NOT NULL THEN 0 ELSE 1 END,
+                  CASE
+                    WHEN $3 = '' THEN 0
+                    ELSE COALESCE(similarity(u.username, $3), 0)
+                       + COALESCE(similarity(u.display_name, $3), 0)
+                  END DESC,
+                  u.created_at DESC,
+                  u.id DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(&pattern)
+            .bind(auth.user_id.as_uuid())
+            .bind(query.as_str())
+            .bind(10_i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("function similarity") {
+                    Status::invalid_argument("search requires pg_trgm extension")
+                } else {
+                    Status::internal("database error")
+                }
+            })?;
+
+            let users = rows
+                .into_iter()
+                .map(
+                    |(id, username, display_name, avatar_media_id, is_following)| {
+                        let avatar_url = avatar_media_id
+                            .map(|media_id| format!("/media/{}", media_id))
+                            .unwrap_or_default();
+
+                        build_user_summary(
+                            &UserId::from_uuid(id),
+                            username,
+                            display_name,
+                            avatar_url,
+                            is_following,
+                        )
+                    },
+                )
+                .collect();
+
+            return Ok(Response::new(SearchUsersResponse {
+                users,
+                pagination: Some(cove_proto::cove::common::PaginationResponse {
+                    next_cursor: String::new(),
+                    has_more: false,
+                    total_count: -1,
+                }),
+            }));
+        }
+
         let pagination = PaginationParams::from_proto(
             req.pagination.as_ref().map(|p| p.page_size).unwrap_or(20),
-            req.pagination.as_ref().map(|p| p.cursor.as_str()).unwrap_or(""),
+            req.pagination
+                .as_ref()
+                .map(|p| p.cursor.as_str())
+                .unwrap_or(""),
         );
         let limit = (pagination.limit + 1) as i64;
         let pattern = format!("%{}%", query);
@@ -79,7 +167,7 @@ impl SearchService for SearchServiceImpl {
                 "#,
             )
             .bind(&pattern)
-            .bind(query)
+            .bind(query.as_str())
             .bind(limit)
             .bind(cursor.timestamp)
             .bind(cursor.id)
@@ -107,7 +195,7 @@ impl SearchService for SearchServiceImpl {
                 "#,
             )
             .bind(&pattern)
-            .bind(query)
+            .bind(query.as_str())
             .bind(limit)
             .fetch_all(&self.pool)
             .await
@@ -200,7 +288,10 @@ impl SearchService for SearchServiceImpl {
 
         let pagination = PaginationParams::from_proto(
             req.pagination.as_ref().map(|p| p.page_size).unwrap_or(20),
-            req.pagination.as_ref().map(|p| p.cursor.as_str()).unwrap_or(""),
+            req.pagination
+                .as_ref()
+                .map(|p| p.cursor.as_str())
+                .unwrap_or(""),
         );
         let limit = (pagination.limit + 1) as i64;
         let pattern = format!("%{}%", query);
@@ -317,51 +408,67 @@ impl SearchService for SearchServiceImpl {
         let results: Vec<SearchPostResult> = truncated
             .iter()
             .cloned()
-            .map(|(post_id, author_id, caption, username, display_name, avatar_media_id, media_id, media_type, width, height, aspect_ratio, duration_seconds, _)| {
-                let caption_snippet = if caption.len() > snippet_len {
-                    format!("{}...", &caption[..snippet_len])
-                } else {
-                    caption.clone()
-                };
-                let avatar_url = avatar_media_id
-                    .map(|media_id| format!("/media/{}", media_id))
-                    .unwrap_or_default();
+            .map(
+                |(
+                    post_id,
+                    author_id,
+                    caption,
+                    username,
+                    display_name,
+                    avatar_media_id,
+                    media_id,
+                    media_type,
+                    width,
+                    height,
+                    aspect_ratio,
+                    duration_seconds,
+                    _,
+                )| {
+                    let caption_snippet = if caption.len() > snippet_len {
+                        format!("{}...", &caption[..snippet_len])
+                    } else {
+                        caption.clone()
+                    };
+                    let avatar_url = avatar_media_id
+                        .map(|media_id| format!("/media/{}", media_id))
+                        .unwrap_or_default();
 
-                let author = build_user_summary(
-                    &cove_common::id::UserId::from_uuid(*author_id),
-                    username.clone(),
-                    display_name.as_deref().unwrap_or_default().to_string(),
-                    avatar_url,
-                    false,
-                );
+                    let author = build_user_summary(
+                        &cove_common::id::UserId::from_uuid(*author_id),
+                        username.clone(),
+                        display_name.as_deref().unwrap_or_default().to_string(),
+                        avatar_url,
+                        false,
+                    );
 
-                let media_type_enum = media_type
-                    .as_deref()
-                    .map(|t| match t {
-                        "video" => MediaType::Video as i32,
-                        "audio" => MediaType::Audio as i32,
-                        _ => MediaType::Photo as i32,
-                    })
-                    .unwrap_or(MediaType::Unspecified as i32);
+                    let media_type_enum = media_type
+                        .as_deref()
+                        .map(|t| match t {
+                            "video" => MediaType::Video as i32,
+                            "audio" => MediaType::Audio as i32,
+                            _ => MediaType::Photo as i32,
+                        })
+                        .unwrap_or(MediaType::Unspecified as i32);
 
-                let thumbnail = media_id.map(|id| MediaReference {
-                    media_id: id.to_string(),
-                    media_type: media_type_enum,
-                    url: String::new(),
-                    width: width.unwrap_or(0),
-                    height: height.unwrap_or(0),
-                    aspect_ratio: aspect_ratio.unwrap_or(1.0),
-                    duration_seconds: duration_seconds.unwrap_or(0),
-                    thumbnail_url: String::new(),
-                });
+                    let thumbnail = media_id.map(|id| MediaReference {
+                        media_id: id.to_string(),
+                        media_type: media_type_enum,
+                        url: String::new(),
+                        width: width.unwrap_or(0),
+                        height: height.unwrap_or(0),
+                        aspect_ratio: aspect_ratio.unwrap_or(1.0),
+                        duration_seconds: duration_seconds.unwrap_or(0),
+                        thumbnail_url: String::new(),
+                    });
 
-                SearchPostResult {
-                    post_id: post_id.to_string(),
-                    author: Some(author),
-                    caption_snippet,
-                    thumbnail,
-                }
-            })
+                    SearchPostResult {
+                        post_id: post_id.to_string(),
+                        author: Some(author),
+                        caption_snippet,
+                        thumbnail,
+                    }
+                },
+            )
             .collect();
 
         let next_cursor = if has_more && rows.len() > pagination.limit as usize {

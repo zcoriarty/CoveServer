@@ -76,9 +76,6 @@ pub struct AuthServiceImpl {
 }
 
 impl AuthServiceImpl {
-    const HARDCODED_DEV_INVITE_CODE: &'static str = "COVEDEV";
-    const HARDCODED_DEV_INVITER_USERNAME: &'static str = "cove_dev";
-
     pub fn new(
         pool: PgPool,
         token_service: TokenService,
@@ -97,9 +94,15 @@ impl AuthServiceImpl {
         extract_auth(request_metadata, &self.config.auth.jwt_secret).map_err(Into::into)
     }
 
-    fn is_hardcoded_dev_invite(code: &str) -> bool {
-        code.trim()
-            .eq_ignore_ascii_case(Self::HARDCODED_DEV_INVITE_CODE)
+    fn get_hardcoded_inviter_username(code: &str) -> Option<&'static str> {
+        let code = code.trim();
+        if code.eq_ignore_ascii_case("COVEDEV") {
+            Some("cove_dev")
+        } else if code.eq_ignore_ascii_case("BRITNEYSB!TCHES") || code.eq_ignore_ascii_case("FRIEND") {
+            Some("zackcor27")
+        } else {
+            None
+        }
     }
 }
 
@@ -128,7 +131,7 @@ impl AuthService for AuthServiceImpl {
         }
 
         let (invite_id, created_by): (Option<uuid::Uuid>, Option<uuid::Uuid>) =
-            if Self::is_hardcoded_dev_invite(invite_code) {
+            if Self::get_hardcoded_inviter_username(invite_code).is_some() {
                 (None, None)
             } else {
                 // Validate invite code and get inviter.
@@ -716,10 +719,10 @@ impl AuthService for AuthServiceImpl {
             }));
         }
 
-        if Self::is_hardcoded_dev_invite(invite_code) {
+        if let Some(username) = Self::get_hardcoded_inviter_username(invite_code) {
             return Ok(Response::new(ValidateInviteResponse {
                 valid: true,
-                invited_by_username: Self::HARDCODED_DEV_INVITER_USERNAME.to_string(),
+                invited_by_username: username.to_string(),
             }));
         }
 

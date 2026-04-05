@@ -1,6 +1,7 @@
 //! Follow service and gRPC handler.
 
 use crate::auth;
+use crate::notification_preferences;
 use crate::push::PushService;
 use cove_common::auth_context::AuthContext;
 use cove_common::id::UserId;
@@ -143,6 +144,17 @@ impl FollowService for FollowServiceImpl {
             Some(chrono::Utc::now())
         };
         let mut follow_request_inserted = false;
+        let follow_request_notifications_enabled = if state == "pending" {
+            notification_preferences::is_enabled_for_notification_type(
+                &self.pool,
+                target_id,
+                "follow_request",
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+        } else {
+            false
+        };
 
         let mut tx = self
             .pool
@@ -190,7 +202,7 @@ impl FollowService for FollowServiceImpl {
             .map_err(|e| Status::internal("database error"))?;
 
             Self::backfill_home_feed_for_follow(&mut tx, &auth.user_id, &target_id).await?;
-        } else {
+        } else if follow_request_notifications_enabled {
             let inserted = sqlx::query(
                 r#"
                 INSERT INTO notifications (id, recipient_id, actor_id, notification_type, target_type, target_id, message, is_read, created_at)
@@ -331,6 +343,15 @@ impl FollowService for FollowServiceImpl {
         let follower_id = UserId::parse(&req.follower_user_id)
             .map_err(|_| Status::invalid_argument("invalid follower_user_id"))?;
 
+        let follow_accepted_notifications_enabled =
+            notification_preferences::is_enabled_for_notification_type(
+                &self.pool,
+                follower_id,
+                "follow_accepted",
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
         let mut tx = self
             .pool
             .begin()
@@ -389,28 +410,32 @@ impl FollowService for FollowServiceImpl {
 
         Self::backfill_home_feed_for_follow(&mut tx, &follower_id, &auth.user_id).await?;
 
-        let inserted = sqlx::query(
-            r#"
-            INSERT INTO notifications (id, recipient_id, actor_id, notification_type, target_type, target_id, message, is_read, created_at)
-            SELECT gen_random_uuid(), $1, $2, 'follow_accepted', 'user', $3, '', FALSE, NOW()
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM notifications
-                WHERE recipient_id = $1
-                  AND actor_id = $2
-                  AND notification_type = 'follow_accepted'
-                  AND target_id = $3
-                  AND NOT is_read
+        let follow_accepted_inserted = if follow_accepted_notifications_enabled {
+            let inserted = sqlx::query(
+                r#"
+                INSERT INTO notifications (id, recipient_id, actor_id, notification_type, target_type, target_id, message, is_read, created_at)
+                SELECT gen_random_uuid(), $1, $2, 'follow_accepted', 'user', $3, '', FALSE, NOW()
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM notifications
+                    WHERE recipient_id = $1
+                      AND actor_id = $2
+                      AND notification_type = 'follow_accepted'
+                      AND target_id = $3
+                      AND NOT is_read
+                )
+                "#,
             )
-            "#,
-        )
-        .bind(follower_id.as_uuid())
-        .bind(auth.user_id.as_uuid())
-        .bind(auth.user_id.as_uuid())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| Status::internal("database error"))?;
-        let follow_accepted_inserted = inserted.rows_affected() > 0;
+            .bind(follower_id.as_uuid())
+            .bind(auth.user_id.as_uuid())
+            .bind(auth.user_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal("database error"))?;
+            inserted.rows_affected() > 0
+        } else {
+            false
+        };
 
         tx.commit()
             .await

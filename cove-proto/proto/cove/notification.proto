@@ -9,6 +9,8 @@ service NotificationService {
   rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
   rpc MarkRead(MarkReadRequest) returns (MarkReadResponse);
   rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse);
+  rpc GetNotificationPreferences(GetNotificationPreferencesRequest) returns (GetNotificationPreferencesResponse);
+  rpc UpdateNotificationPreferences(UpdateNotificationPreferencesRequest) returns (UpdateNotificationPreferencesResponse);
 }
 
 message ListNotificationsRequest {
@@ -51,4 +53,28 @@ message GetUnreadCountRequest {}
 
 message GetUnreadCountResponse {
   int32 count = 1;
+}
+
+message NotificationPreferences {
+  bool likes_enabled = 1;
+  bool comments_enabled = 2;
+  bool mentions_enabled = 3;
+  bool shares_enabled = 4;
+  bool follow_requests_enabled = 5;
+  bool follow_activity_enabled = 6;
+  bool new_posts_enabled = 7;
+}
+
+message GetNotificationPreferencesRequest {}
+
+message GetNotificationPreferencesResponse {
+  NotificationPreferences preferences = 1;
+}
+
+message UpdateNotificationPreferencesRequest {
+  NotificationPreferences preferences = 1;
+}
+
+message UpdateNotificationPreferencesResponse {
+  NotificationPreferences preferences = 1;
 }

@@ -1,6 +1,7 @@
 //! Job handler implementations for the background worker.
 
 use cove_common::id::UserId;
+use cove_server::notification_preferences;
 use cove_server::push::PushService;
 use cove_server::storage::object_store::SupabaseStorageService;
 use exif::{In, Reader as ExifReader, Tag};
@@ -317,6 +318,17 @@ pub async fn handle_notification(
     } else {
         Some(Uuid::parse_str(target_id)?)
     };
+    let recipient_user_id = UserId::from_uuid(recipient_uuid);
+
+    let preferences = notification_preferences::load(pool, recipient_user_id).await?;
+    if !preferences.allows_notification_type(normalized_notification_type) {
+        tracing::info!(
+            recipient = recipient_id,
+            notification_type = normalized_notification_type,
+            "notification skipped by user preferences"
+        );
+        return Ok(());
+    }
 
     sqlx::query(
         r#"
@@ -341,7 +353,7 @@ pub async fn handle_notification(
 
     if let Err(error) = push
         .send_notification_push(
-            UserId::from_uuid(recipient_uuid),
+            recipient_user_id,
             UserId::from_uuid(actor_uuid),
             normalized_notification_type,
             target_uuid,

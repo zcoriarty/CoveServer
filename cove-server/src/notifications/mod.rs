@@ -1,15 +1,18 @@
 //! Notification service gRPC implementation.
 
 use crate::auth;
+use crate::notification_preferences;
 use crate::authorization::build_user_summary;
 use crate::push::PushService;
 use cove_common::error::{CoveError, CoveResult};
 use cove_common::id::{NotificationId, UserId};
 use cove_common::pagination::{CursorValue, PaginationParams};
 use cove_proto::cove::notification::{
-    notification_service_server::NotificationService, GetUnreadCountRequest,
-    GetUnreadCountResponse, ListNotificationsRequest, ListNotificationsResponse, MarkReadRequest,
-    MarkReadResponse, NotificationItem, NotificationType,
+    notification_service_server::NotificationService, GetNotificationPreferencesRequest,
+    GetNotificationPreferencesResponse, GetUnreadCountRequest, GetUnreadCountResponse,
+    ListNotificationsRequest, ListNotificationsResponse, MarkReadRequest, MarkReadResponse,
+    NotificationItem, NotificationPreferences as NotificationPreferencesMessage, NotificationType,
+    UpdateNotificationPreferencesRequest, UpdateNotificationPreferencesResponse,
 };
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -52,6 +55,37 @@ impl NotificationServiceImpl {
             _ => NotificationType::Unspecified as i32,
         }
     }
+
+    fn preferences_to_proto(
+        preferences: notification_preferences::NotificationPreferences,
+    ) -> NotificationPreferencesMessage {
+        NotificationPreferencesMessage {
+            likes_enabled: preferences.likes_enabled,
+            comments_enabled: preferences.comments_enabled,
+            mentions_enabled: preferences.mentions_enabled,
+            shares_enabled: preferences.shares_enabled,
+            follow_requests_enabled: preferences.follow_requests_enabled,
+            follow_activity_enabled: preferences.follow_activity_enabled,
+            new_posts_enabled: preferences.new_posts_enabled,
+        }
+    }
+
+    fn preferences_from_proto(
+        preferences: Option<NotificationPreferencesMessage>,
+    ) -> Result<notification_preferences::NotificationPreferences, Status> {
+        let preferences =
+            preferences.ok_or_else(|| Status::invalid_argument("preferences required"))?;
+
+        Ok(notification_preferences::NotificationPreferences {
+            likes_enabled: preferences.likes_enabled,
+            comments_enabled: preferences.comments_enabled,
+            mentions_enabled: preferences.mentions_enabled,
+            shares_enabled: preferences.shares_enabled,
+            follow_requests_enabled: preferences.follow_requests_enabled,
+            follow_activity_enabled: preferences.follow_activity_enabled,
+            new_posts_enabled: preferences.new_posts_enabled,
+        })
+    }
 }
 
 /// Public helper for other modules to create notifications.
@@ -65,6 +99,18 @@ pub async fn create_notification(
     target_id: Option<Uuid>,
     message: &str,
 ) -> CoveResult<()> {
+    let notifications_enabled = notification_preferences::is_enabled_for_notification_type(
+        pool,
+        recipient_id,
+        notification_type,
+    )
+    .await
+    .map_err(|e| CoveError::Database(e.to_string()))?;
+
+    if !notifications_enabled {
+        return Ok(());
+    }
+
     let id = NotificationId::new();
     sqlx::query(
         r#"
@@ -330,6 +376,51 @@ impl NotificationService for NotificationServiceImpl {
 
         Ok(Response::new(GetUnreadCountResponse {
             count: count as i32,
+        }))
+    }
+
+    async fn get_notification_preferences(
+        &self,
+        request: Request<GetNotificationPreferencesRequest>,
+    ) -> Result<Response<GetNotificationPreferencesResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        if let Err(error) = self
+            .push
+            .sync_token_from_metadata(&auth, request.metadata())
+            .await
+        {
+            tracing::warn!(error = %error, "failed syncing push token metadata");
+        }
+
+        let preferences = notification_preferences::load(&self.pool, auth.user_id)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
+
+        Ok(Response::new(GetNotificationPreferencesResponse {
+            preferences: Some(Self::preferences_to_proto(preferences)),
+        }))
+    }
+
+    async fn update_notification_preferences(
+        &self,
+        request: Request<UpdateNotificationPreferencesRequest>,
+    ) -> Result<Response<UpdateNotificationPreferencesResponse>, Status> {
+        let auth = self.auth(request.metadata())?;
+        if let Err(error) = self
+            .push
+            .sync_token_from_metadata(&auth, request.metadata())
+            .await
+        {
+            tracing::warn!(error = %error, "failed syncing push token metadata");
+        }
+
+        let preferences = Self::preferences_from_proto(request.into_inner().preferences)?;
+        let updated = notification_preferences::update(&self.pool, auth.user_id, preferences)
+            .await
+            .map_err(|_| Status::internal("database error"))?;
+
+        Ok(Response::new(UpdateNotificationPreferencesResponse {
+            preferences: Some(Self::preferences_to_proto(updated)),
         }))
     }
 }

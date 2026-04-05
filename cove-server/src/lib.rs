@@ -12,6 +12,7 @@ pub mod jobs;
 pub mod likes;
 pub mod media;
 pub mod mentions;
+pub mod notification_preferences;
 pub mod notifications;
 pub mod posts;
 pub mod profiles;

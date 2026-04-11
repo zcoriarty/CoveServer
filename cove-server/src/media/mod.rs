@@ -28,7 +28,7 @@ const ALLOWED_AUDIO_TYPES: &[&str] = &[
     "audio/x-caf",
 ];
 
-const MAX_IMAGE_SIZE_BYTES: i64 = 20 * 1024 * 1024; // 20 MB
+const MAX_IMAGE_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
 const MAX_VIDEO_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
 const MAX_AUDIO_SIZE_BYTES: i64 = 30 * 1024 * 1024; // 30 MB
 
@@ -70,9 +70,13 @@ impl MediaServiceImpl {
         };
 
         if file_size <= 0 || file_size > max_size {
+            let max_size_mb = max_size as f64 / (1024_f64 * 1024_f64);
+            let received_size_mb = (file_size.max(0)) as f64 / (1024_f64 * 1024_f64);
             return Err(Status::invalid_argument(format!(
-                "file size must be between 1 and {} bytes",
-                max_size
+                "{} size must be between 1 byte and {:.0} MB (received {:.1} MB)",
+                Self::media_type_to_str(media_type),
+                max_size_mb,
+                received_size_mb
             )));
         }
 

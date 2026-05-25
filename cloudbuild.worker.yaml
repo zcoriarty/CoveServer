@@ -1,42 +1,41 @@
 steps:
-  - name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - -f
-      - Dockerfile
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/cove-worker:${SHORT_SHA}
-      - .
-
-  - name: gcr.io/cloud-builders/docker
-    args:
-      - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/cove-worker:${SHORT_SHA}
-
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - beta
-      - run
-      - worker-pools
-      - deploy
-      - ${_WORKER_POOL}
-      - --region=${_REGION}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/cove-worker:${SHORT_SHA}
-      - --command=cove-worker
-      - --scaling=${_SCALING}
-      - --update-secrets=COVE_PUSH__APNS_PRIVATE_KEY=${_APNS_SECRET}:latest
-      - --update-env-vars=COVE_PUSH__APNS_PRIVATE_KEY_PATH=/tmp/secrets/AuthKey.p8
+      - -ceu
+      - |
+        set -o pipefail
 
-images:
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/cove-worker:${SHORT_SHA}
+        disabled_server=0
+        for service in ${_SERVER_SERVICES}; do
+          if gcloud run services describe "$service" --region="${_REGION}" >/tmp/cove-service.err 2>&1; then
+            gcloud run services update "$service" --region="${_REGION}" --scaling=0
+            disabled_server=1
+          elif grep -Eiq "not[ -]?found|could not be found|NOT_FOUND" /tmp/cove-service.err; then
+            true
+          else
+            cat /tmp/cove-service.err >&2
+            exit 1
+          fi
+        done
+
+        if [ "$disabled_server" = "0" ]; then
+          echo "No Cloud Run service found among: ${_SERVER_SERVICES}; nothing to disable."
+        fi
+
+        if gcloud beta run worker-pools describe "${_WORKER_POOL}" --region="${_REGION}" >/tmp/cove-worker-pool.err 2>&1; then
+          gcloud beta run worker-pools update "${_WORKER_POOL}" --region="${_REGION}" --scaling=0
+        elif grep -Eiq "not[ -]?found|could not be found|NOT_FOUND" /tmp/cove-worker-pool.err; then
+          echo "No Cloud Run worker pool found: ${_WORKER_POOL}; nothing to disable."
+        else
+          cat /tmp/cove-worker-pool.err >&2
+          exit 1
+        fi
 
 substitutions:
   _REGION: us-central1
-  _AR_REPO: cove
+  _SERVER_SERVICES: cove-api cove-server
   _WORKER_POOL: cove-worker
-  _SCALING: "1"
-  _APNS_SECRET: cove-apns-authkey
 
 options:
   logging: CLOUD_LOGGING_ONLY
